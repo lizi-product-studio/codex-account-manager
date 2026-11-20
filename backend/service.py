@@ -67,20 +67,39 @@ class Service:
                 self.refresh_live_async(force=True, delay=2.0)
         tl.touch(now)
 
+    def _current_low_remaining(self, key):
+        snaps = self.live_usage.get(key)
+        if not isinstance(snaps, list) or not snaps:
+            return False
+        for s in snaps:
+            if not isinstance(s, list) or len(s) < 13:
+                continue
+            for u in (s[3], s[6]):
+                if isinstance(u, (int, float)) and u >= 90:
+                    return True
+        return False
+
     def refresh_live(self, force=False):
-        """通过官方 codex.exe 读取当前登录账号的实时额度（只查当前这一个号，不碰其他号）。"""
+        """通过官方 codex 读取当前登录账号的实时额度（只查当前这一个号，不碰其他号）。"""
         cur, _, _ = self._current()
         if not cur["valid"] or cur["mode"] != "chatgpt":
             return dict(ok=False, error="当前没有登录 ChatGPT 账号")
         key = cur["key"]
         now = time.time()
-        min_gap = 5 if force else 30
+        if force:
+            min_gap = 5
+        elif self._current_low_remaining(key):
+            min_gap = 60
+        else:
+            min_gap = 180
         if now - self._last_live_at.get(key, 0) < min_gap:
             return dict(ok=True, cached=True)
         if not self._live_lock.acquire(blocking=False):
             return dict(ok=True, busy=True)
         try:
             self._last_live_at[key] = now
+            if not codex.find_codex_exe():
+                return dict(ok=False, error="未找到本机 codex 可执行文件")
             acct_id, items = codex.read_live_rate_limits()
             if not items:
                 return dict(ok=False, error="暂时无法从 Codex 读取实时额度")

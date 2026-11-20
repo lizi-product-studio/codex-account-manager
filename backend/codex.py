@@ -270,6 +270,30 @@ def start():
     return False
 
 
+def _mac_running_codex_bins():
+    """从当前运行中的进程列表里提取真实 codex 可执行文件路径。"""
+    out = []
+    try:
+        r = subprocess.run(
+            ["ps", "-axo", "command="],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=4,
+        )
+        for raw in (r.stdout or "").splitlines():
+            line = raw.strip()
+            if not line or "codex-account-manager" in line:
+                continue
+            try:
+                tok = shlex.split(line)[0]
+            except ValueError:
+                tok = line.split()[0]
+            if os.path.basename(tok) == "codex" and os.path.isabs(tok) and os.path.isfile(tok) and os.access(tok, os.X_OK):
+                if tok not in out:
+                    out.append(tok)
+    except Exception:
+        pass
+    return out
+
+
 def find_codex_exe():
     """定位本机安装的官方 codex 可执行文件（优先 Codex 桌面版自带版本）。"""
     if IS_WIN:
@@ -280,19 +304,32 @@ def find_codex_exe():
         return shutil.which("codex")
     elif IS_MAC:
         home = os.path.expanduser("~")
-        cands = [
+        cands = _mac_running_codex_bins() + [
             "/Applications/Codex.app/Contents/Resources/codex",
+            "/Applications/Codex.app/Contents/Resources/bin/codex",
+            "/Applications/Codex.app/Contents/MacOS/codex",
             os.path.join(home, "Applications", "Codex.app", "Contents", "Resources", "codex"),
+            os.path.join(home, "Applications", "Codex.app", "Contents", "Resources", "bin", "codex"),
         ]
         for sub in (
             os.path.join(home, "Library", "Application Support", "OpenAI", "Codex", "bin", "*", "codex"),
             os.path.join(home, "Library", "Application Support", "Codex", "bin", "*", "codex"),
+            os.path.join(home, ".nvm", "versions", "node", "*", "bin", "codex"),
+            os.path.join(home, ".fnm", "node-versions", "*", "installation", "bin", "codex"),
         ):
             try:
                 cands.extend(sorted(glob.glob(sub), key=os.path.getmtime, reverse=True))
             except OSError:
                 pass
-        cands.extend(["/opt/homebrew/bin/codex", "/usr/local/bin/codex"])
+        cands.extend([
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex",
+            os.path.join(home, ".codex", "bin", "codex"),
+            os.path.join(home, ".local", "bin", "codex"),
+            os.path.join(home, ".npm-global", "bin", "codex"),
+            os.path.join(home, ".volta", "bin", "codex"),
+            os.path.join(home, ".bun", "bin", "codex"),
+        ])
         for p in cands:
             if p and os.path.isfile(p) and os.access(p, os.X_OK):
                 return p
@@ -315,13 +352,26 @@ def read_live_rate_limits(timeout=12):
     )
     if IS_WIN:
         popen_kwargs["creationflags"] = CREATE_NO_WINDOW
+    elif IS_MAC:
+        # 从 .app 启动时 macOS PATH 极简，补齐常见目录以免 npm/Homebrew 版 codex 找不到 node
+        env = os.environ.copy()
+        extra = [
+            os.path.dirname(exe),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            os.path.expanduser("~/.volta/bin"),
+            os.path.expanduser("~/.local/bin"),
+        ]
+        cur_path = env.get("PATH", "")
+        env["PATH"] = ":".join([p for p in extra if p] + ([cur_path] if cur_path else []))
+        popen_kwargs["env"] = env
     proc = subprocess.Popen([exe, "app-server"], **popen_kwargs)
     timer = threading.Timer(timeout, lambda: proc.kill() if proc.poll() is None else None)
     timer.start()
     try:
         reqs = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-             "params": {"clientInfo": {"name": "codex-account-manager", "version": "1.2.0"}}},
+             "params": {"clientInfo": {"name": "codex-account-manager", "version": "1.3.3"}}},
             {"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": {}},
         ]
         for r in reqs:

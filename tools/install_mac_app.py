@@ -129,6 +129,7 @@ def build_mac_app(repo_dir, target_app, python_bin=None, make_icns=True):
 
     launcher_script = "\n".join([
         "#!/bin/bash",
+        'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"',
         "REPO_DIR=" + shlex.quote(repo_dir),
         "PY_CFG=" + shlex.quote(py_bin),
         'PY_BIN=""',

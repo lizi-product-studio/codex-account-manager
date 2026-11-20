@@ -313,7 +313,7 @@ function renderOverview() {
 }
 
 // ------------------------------------------------------------------ 渲染：卡片
-function renderWindow(w, stale) {
+function renderWindow(w, stale, forcedOut = false) {
   const reset = w.resets_at;
   if (reset && reset <= nowSec()) {
     return `<div class="win">
@@ -323,8 +323,8 @@ function renderWindow(w, stale) {
       <div class="win-foot">上次记录已用 ${w.used.toFixed(0)}%，已于 ${fmtShort(reset)} 重置</div></div>`;
   }
   const used = Math.min(100, Math.max(0, w.used));
-  const left = 100 - used;
-  const isOut = left <= 0.5;
+  const left = forcedOut ? 0 : 100 - used;
+  const isOut = forcedOut || left <= 0.5;
   const cls = left <= 10 ? 'red' : left < 30 ? 'amber' : '';
   return `<div class="win">
     <div class="win-top"><span class="win-label">${esc(w.label)}额度</span>
@@ -345,7 +345,14 @@ function renderUsage(usage, isCurrent, stale) {
     const c = l.credits || {};
     const credits = c.unlimited ? '<div class="credits">Credits：无限</div>'
       : (c.has ? `<div class="credits">Credits 余额：${esc(c.balance)}</div>` : '');
-    return head + l.windows.map((w) => renderWindow(w, stale)).join('') + credits;
+    let bottleneckWin = null;
+    if (l.reached) {
+      const active = l.windows.filter((w) => !(w.resets_at && w.resets_at <= nowSec()));
+      if (active.length) {
+        bottleneckWin = active.reduce((a, b) => (b.used > a.used ? b : a), active[0]);
+      }
+    }
+    return head + l.windows.map((w) => renderWindow(w, stale, w === bottleneckWin)).join('') + credits;
   }).join('');
 }
 
@@ -456,7 +463,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.3.2';
+  const ver = state.version || u.app_version || '1.3.3';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -606,7 +613,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.3.2';
+  const ver = (state && state.version) || u.app_version || '1.3.3';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');

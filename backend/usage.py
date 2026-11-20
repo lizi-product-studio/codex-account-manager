@@ -398,9 +398,10 @@ def account_status(usage, now):
     st["bottleneck"] = bottleneck["label"] if bottleneck else None
     st["next_reset"] = min(resets) if resets else None
     st["updated"] = usage["updated"]
-    if rem <= 0.5:
+    if (not all_reset and lim.get("reached")) or rem <= 0.5:
+        st["remaining"] = 0
         st["level"] = "out"
-        st["recover_at"] = bottleneck.get("resets_at") if bottleneck else None
+        st["recover_at"] = (bottleneck.get("resets_at") if bottleneck else None) or st["next_reset"]
     elif rem < 30:
         st["level"] = "low"
     else:

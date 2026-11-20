@@ -216,9 +216,10 @@ class App:
 
     # ---------------------------------------------------------------- 后台
     def monitor(self):
-        """窗口隐藏时也持续记录：额度扫描、账号时间线、托盘图标、代码更新检查与系统提醒。"""
+        """窗口隐藏时也持续记录：额度扫描、当前号定时实时同步、账号时间线、托盘图标、代码更新检查与系统提醒。"""
         while not self._stop.is_set():
             try:
+                self.svc.refresh_live_async(force=False)
                 if settings.load().get("auto_check_update", True):
                     self.svc.updater.check_async(force=False)
                 st = self.svc.get_state()
