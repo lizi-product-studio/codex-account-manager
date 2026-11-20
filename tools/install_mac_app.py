@@ -120,7 +120,9 @@ def build_mac_app(repo_dir, target_app, python_bin=None, make_icns=True):
         plistlib.dump(plist_data, f)
 
     if make_icns:
-        icon_png = os.path.join(repo_dir, "assets", "icon.png")
+        icon_png = os.path.join(repo_dir, "assets", "icon_mac.png")
+        if not os.path.isfile(icon_png):
+            icon_png = os.path.join(repo_dir, "assets", "icon.png")
         out_icns = os.path.join(res_dir, "AppIcon.icns")
         if not _generate_icns(icon_png, out_icns) and os.path.isfile(icon_png):
             shutil.copy2(icon_png, os.path.join(res_dir, "AppIcon.png"))

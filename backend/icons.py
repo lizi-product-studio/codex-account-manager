@@ -1,7 +1,7 @@
 """图标绘制：应用图标（打包用）+ 托盘动态图标（显示当前账号剩余百分比）。"""
 import os
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 COLORS = {
     "ok": (18, 161, 80),
@@ -76,12 +76,40 @@ def tray_icon(remaining=None, level="none", size=64):
     return img
 
 
+def mac_app_icon(size=512):
+    """符合 macOS HIG 留白规范的应用图标（~80.5% 主体居中 + ~9.8% 四周透明留白 + 柔和阴影）。"""
+    s = size
+    canvas = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    body = round(s * 824 / 1024)
+    pad = (s - body) // 2
+
+    # 柔和底部投影，与原生 macOS 程序坞图标视觉统一
+    shadow_mask = Image.new("L", (s, s), 0)
+    y_off = max(1, round(s * 0.012))
+    ImageDraw.Draw(shadow_mask).rounded_rectangle(
+        [pad, pad + y_off, pad + body - 1, pad + body - 1 + y_off],
+        radius=int(body * 0.225),
+        fill=64,
+    )
+    shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(radius=s * 0.016))
+    shadow = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    shadow.putalpha(shadow_mask)
+    canvas = Image.alpha_composite(canvas, shadow)
+
+    # 2x 超采样绘制主体再抗锯齿缩放
+    inner = app_icon(body * 2).resize((body, body), Image.LANCZOS)
+    fg = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    fg.paste(inner, (pad, pad), inner)
+    return Image.alpha_composite(canvas, fg)
+
+
 def write_app_icons(folder):
     os.makedirs(folder, exist_ok=True)
     big = app_icon(256)
     big.save(os.path.join(folder, "icon.png"))
     big.save(os.path.join(folder, "icon.ico"),
              sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    mac_app_icon(512).save(os.path.join(folder, "icon_mac.png"))
 
 
 if __name__ == "__main__":

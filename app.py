@@ -399,7 +399,12 @@ def main():
                 f.write(APP_VERSION)
         except OSError:
             pass
-    icon_path = os.path.join(RES, "assets", "icon.ico" if IS_WIN else "icon.png")
+    if IS_WIN:
+        icon_path = os.path.join(RES, "assets", "icon.ico")
+    else:
+        icon_path = os.path.join(RES, "assets", "icon_mac.png")
+        if not os.path.isfile(icon_path):
+            icon_path = os.path.join(RES, "assets", "icon.png")
     try:
         webview.start(
             debug="--debug" in sys.argv,
