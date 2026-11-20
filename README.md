@@ -12,7 +12,7 @@
 ### macOS（从 Git 源码运行，支持自动更新）
 1. 克隆仓库并创建虚拟环境安装依赖：
    ```bash
-   git clone https://github.com/lizi-product-studio/dingxinglizi.git codex-account-manager
+   git clone https://github.com/lizi-product-studio/codex-account-manager.git
    cd codex-account-manager
    python3 -m venv .venv
    .venv/bin/python -m pip install --upgrade pip wheel
