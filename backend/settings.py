@@ -16,6 +16,7 @@ DEFAULTS = {
     "launch_after_switch": True,               # 切换后自动启动 Codex
     "notify_enabled": True,                    # 额度快用尽 / 已重置 / 订阅临期 / 新登录 / 新版本系统提醒
     "auto_check_update": True,                 # 自动检查 GitHub 仓库更新
+    "sort_mode": "custom",                     # 总览排序模式：custom | remaining
     "tray_hint_shown": False,                  # 是否提示过“已缩到托盘”
 }
 
@@ -31,6 +32,7 @@ def load():
         s = {}
     out = dict(DEFAULTS)
     out.update({k: v for k, v in s.items() if k in DEFAULTS})
+    out["sort_mode"] = "remaining" if out.get("sort_mode") == "remaining" else "custom"
     out["autostart"] = autostart_enabled()
     return out
 
@@ -43,9 +45,12 @@ def set_value(key, value):
     if key not in DEFAULTS:
         raise KeyError(key)
     s = load()
-    s[key] = bool(value)
-    if key == "autostart":
-        set_autostart(bool(value))
+    if key == "sort_mode":
+        s[key] = "remaining" if str(value) == "remaining" else "custom"
+    else:
+        s[key] = bool(value)
+        if key == "autostart":
+            set_autostart(bool(value))
     save(s)
     return s
 

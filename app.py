@@ -399,14 +399,14 @@ def main():
                 f.write(APP_VERSION)
         except OSError:
             pass
-    icon_path = os.path.join(RES, "assets", "icon.ico")
+    icon_path = os.path.join(RES, "assets", "icon.ico" if IS_WIN else "icon.png")
     try:
         webview.start(
             debug="--debug" in sys.argv,
-            private_mode=False,
+            private_mode=IS_MAC,
             storage_path=storage_dir,
-            http_port=_pick_port(),
-            icon=icon_path if (IS_WIN and os.path.isfile(icon_path)) else None,
+            http_port=_pick_port(0 if IS_MAC else 42817),
+            icon=icon_path if os.path.isfile(icon_path) else None,
         )
     finally:
         app.quitting = True

@@ -10,6 +10,7 @@ let settings = {
   launch_after_switch: true,
   notify_enabled: true,
   auto_check_update: true,
+  sort_mode: 'custom',
 };
 let busy = false;
 let sortMode = localStorage.getItem('sortMode') || 'custom';   // custom | remaining
@@ -168,16 +169,38 @@ function startWaitLogin() {
 // ------------------------------------------------------------------ 数据
 async function refresh(silent = true, forceRender = false, syncLive = false) {
   if (busy) return;
+  const manualSync = !silent && syncLive;
+  const btn = manualSync ? $('btnRefresh') : null;
+  let liveRes = null;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⟳ 刷新中…';
+  }
   try {
     if (syncLive) {
-      try { await api().refresh_live(); } catch (e) { /* 离线时自动回退本地日志 */ }
+      try { liveRes = await api().refresh_live(); } catch (e) { /* 离线时自动回退本地日志 */ }
     }
     const r = await call('get_state');
     state = r.state;
     render(forceRender);
-    if (!silent) toast('已刷新');
+    if (!silent) {
+      if (syncLive && liveRes) {
+        if (liveRes.ok && liveRes.updated) toast('实时额度已同步');
+        else if (liveRes.ok) toast('已是最新实时额度');
+        else toast('已刷新本地记录（' + (liveRes.error || 'Codex 实时同步不可用') + '）');
+      } else if (syncLive) {
+        toast('已刷新本地记录（Codex 实时同步不可用）');
+      } else {
+        toast('已刷新');
+      }
+    }
   } catch (e) {
     toast('读取失败：' + e.message, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '⟳ 刷新';
+    }
   }
 }
 async function loadSettings() {
@@ -185,6 +208,12 @@ async function loadSettings() {
     settings = (await call('get_settings')).settings;
   } catch (e) { /* 用默认值 */ }
   $('chkLaunch').checked = !!settings.launch_after_switch;
+  if (settings.sort_mode === 'remaining' || settings.sort_mode === 'custom') {
+    sortMode = settings.sort_mode;
+    localStorage.setItem('sortMode', sortMode);
+  } else {
+    sortMode = localStorage.getItem('sortMode') || 'custom';
+  }
 }
 async function setSetting(key, value) {
   try {
@@ -415,6 +444,7 @@ function render(force = false) {
     ub.hidden = true;
   }
 
+  $('settingsDot').hidden = !(u.supported && u.has_update);
   if (!$('settings').hidden) renderUpdateBox();
 
   renderOverview();
@@ -426,7 +456,8 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  $('footInfo').textContent = `${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
+  const ver = state.version || u.app_version || '1.3.1';
+  $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
 // 每秒更新倒计时 / “x 分钟前”；有倒计时到点就强制重新拉取渲染
@@ -575,7 +606,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.3.0';
+  const ver = (state && state.version) || u.app_version || '1.3.1';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');
@@ -724,6 +755,7 @@ async function init() {
     if (sortBtn) {
       sortMode = sortBtn.dataset.sort;
       localStorage.setItem('sortMode', sortMode);
+      setSetting('sort_mode', sortMode);
       render(true);
       return;
     }

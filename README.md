@@ -21,6 +21,12 @@
    ```
    > 若 Mac 使用系统自带 Python 3.9，安装时先锁定 `pyobjc-*==11.1`（预编译包），或使用 Homebrew 安装新版 Python（`brew install python@3.12`）。
 
+2. **可选：生成轻量版「Codex账号管家.app」（直接放进「应用程序」或程序坞，仍支持 Git 自动更新）**：
+   ```bash
+   python3 tools/install_mac_app.py
+   ```
+   > 该脚本生成的是轻量级原生 `.app` 启动器（直接调用本仓库源码与 `.venv`，不会打包成静态旧版本副本），双击打开且应用内可自动检测与拉取更新。
+
 ## 核心特性
 1. **安全的额度读取机制**
    - 账号邮箱、订阅套餐（Plus / Pro Lite / Pro / Team 等）与订阅到期时间离线解码自 `auth.json` 的 JWT 载荷；
