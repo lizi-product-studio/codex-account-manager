@@ -1,0 +1,23 @@
+# Build & bundle outputs
+Codex账号管家.exe
+*.exe
+*.lnk
+*.app/
+*.command
+*.spec
+*.icns
+build/
+dist/
+
+# Python / OS caches & virtual environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.DS_Store
+
+# Never commit local Codex credentials, accounts, or logs
+.codex-accounts/
+auth.json
+*.log
