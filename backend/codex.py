@@ -19,6 +19,7 @@ if IS_WIN:
 
     CREATE_NO_WINDOW = 0x08000000
     _TH32CS_SNAPPROCESS = 0x00000002
+    _PROCESS_TERMINATE = 0x0001
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
     _k32 = ctypes.windll.kernel32
@@ -43,6 +44,8 @@ if IS_WIN:
     _k32.QueryFullProcessImageNameW.argtypes = [
         wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
     ]
+    _k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    _k32.TerminateProcess.restype = wintypes.BOOL
     _k32.CloseHandle.argtypes = [wintypes.HANDLE]
 
     _FILTER = r"""
@@ -164,74 +167,78 @@ def is_running():
         return False
 
 
+def _win_terminate_pid(pid):
+    h = _k32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+    if not h:
+        return False
+    try:
+        return bool(_k32.TerminateProcess(h, 0))
+    finally:
+        _k32.CloseHandle(h)
+
+
 def stop():
     """关闭 Codex 桌面版及其全部子进程。返回 (ok: bool, remaining_names: str)。"""
     if IS_WIN:
         if not list_processes():
             return True, ""
-        script = _FILTER + r"""
-$ps = @(Get-CodexProcs)
-if ($ps.Count -eq 0) { 'OK'; exit }
+        # 直接通过 Win32 TerminateProcess 终止（先父进程 ChatGPT 再子进程，避免 PowerShell 冷启动与 2.5s 无效等待）
+        start_t = time.monotonic()
+        deadline = start_t + 6.0
+        taskkill_tried = False
+        while time.monotonic() < deadline:
+            rem = list_processes()
+            if not rem:
+                return True, ""
+            parents = [p for p in rem if p.get("Name") == "ChatGPT"]
+            others = [p for p in rem if p.get("Name") != "ChatGPT"]
+            for p in parents + others:
+                _win_terminate_pid(p["Id"])
+            if not taskkill_tried and parents and (time.monotonic() - start_t) >= 1.2:
+                taskkill_tried = True
+                try:
+                    subprocess.run(
+                        ["taskkill.exe", "/F", "/T", "/IM", "ChatGPT.exe"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=5, creationflags=CREATE_NO_WINDOW,
+                    )
+                except Exception:
+                    pass
+            time.sleep(0.08)
 
-# 1. 先尝试优雅关闭主窗口（等 2.5 秒，若只是缩到托盘则进入强关）
-$ps | Where-Object { $_.Name -eq 'ChatGPT' -and $_.MainWindowHandle -ne [IntPtr]::Zero } |
-  ForEach-Object { try { [void]$_.CloseMainWindow() } catch {} }
-$d = (Get-Date).AddMilliseconds(2500)
-while ((Get-Date) -lt $d -and @(Get-CodexProcs).Count) { Start-Sleep -Milliseconds 250 }
-
-# 2. 循环强关（先杀父进程 ChatGPT.exe，防止 Electron 自动拉起子进程）
-$d = (Get-Date).AddSeconds(10)
-while ((Get-Date) -lt $d) {
-  $left = @(Get-CodexProcs)
-  if ($left.Count -eq 0) { 'OK'; exit }
-  $parents = @($left | Where-Object { $_.Name -eq 'ChatGPT' })
-  $others  = @($left | Where-Object { $_.Name -ne 'ChatGPT' })
-  foreach ($p in ($parents + $others)) {
-    try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
-  }
-  if ($parents.Count -gt 0) {
-    try { & taskkill.exe /F /T /IM ChatGPT.exe 2>$null | Out-Null } catch {}
-  }
-  Start-Sleep -Milliseconds 400
-}
-$rem = @(Get-CodexProcs)
-if ($rem.Count -eq 0) { 'OK' } else { 'FAIL:' + (($rem | Select-Object -ExpandProperty Name -Unique) -join ',') }
-"""
-        out = _ps(script, timeout=40)
-        if out.endswith("OK"):
+        rem = list_processes()
+        if not rem:
             return True, ""
-        rem = out.split("FAIL:", 1)[1].strip() if "FAIL:" in out else ""
-        return False, rem
+        return False, ",".join(sorted({p.get("Name") or "Codex" for p in rem}))
     elif IS_MAC:
         if not list_processes():
             return True, ""
-        try:
-            subprocess.run(
-                ["osascript", "-e", 'tell application "Codex" to quit'],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
-            )
-        except Exception:
-            pass
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            if not list_processes():
-                return True, ""
-            time.sleep(0.25)
-
+        # 直接发 SIGTERM（主进程优先，高频 80ms 轮询），0.8s 后对顽固残留升级 SIGKILL
         retry_start = time.monotonic()
-        retry_deadline = retry_start + 8.0
+        retry_deadline = retry_start + 5.0
+        sent_term = set()
         while time.monotonic() < retry_deadline:
             rem = list_processes()
             if not rem:
                 return True, ""
             rem.sort(key=lambda p: (0 if p.get("Main") else 1))
-            sig = signal.SIGTERM if (time.monotonic() - retry_start) < 2.5 else signal.SIGKILL
-            for p in rem:
-                try:
-                    os.kill(p["Id"], sig)
-                except (ProcessLookupError, PermissionError, OSError):
-                    pass
-            time.sleep(0.35)
+            elapsed = time.monotonic() - retry_start
+            if elapsed < 0.8:
+                for p in rem:
+                    pid = p["Id"]
+                    if pid not in sent_term:
+                        sent_term.add(pid)
+                        try:
+                            os.kill(pid, signal.SIGTERM)
+                        except (ProcessLookupError, PermissionError, OSError):
+                            pass
+            else:
+                for p in rem:
+                    try:
+                        os.kill(p["Id"], signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError, OSError):
+                        pass
+            time.sleep(0.08)
 
         rem = list_processes()
         if not rem:
@@ -248,8 +255,14 @@ def package_family():
         return ""
     global _pfn_cache
     if _pfn_cache is None:
-        _pfn_cache = _ps("(Get-AppxPackage -Name 'OpenAI.Codex' | Select-Object -First 1).PackageFamilyName",
-                         timeout=20) or ""
+        # 优先直接读 %LOCALAPPDATA%\Packages\OpenAI.Codex_*（<1ms），找不到再回退 PowerShell
+        pkg_pat = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Packages", "OpenAI.Codex_*")
+        hits = sorted(glob.glob(pkg_pat), key=os.path.getmtime, reverse=True)
+        if hits:
+            _pfn_cache = os.path.basename(hits[0])
+        else:
+            _pfn_cache = _ps("(Get-AppxPackage -Name 'OpenAI.Codex' | Select-Object -First 1).PackageFamilyName",
+                             timeout=20) or ""
     return _pfn_cache
 
 
@@ -263,8 +276,8 @@ def start():
     elif IS_MAC:
         for app_path in ("/Applications/Codex.app", os.path.expanduser("~/Applications/Codex.app")):
             if os.path.isdir(app_path):
-                r = subprocess.run(["open", app_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return r.returncode == 0
+                subprocess.Popen(["open", app_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
         r = subprocess.run(["open", "-a", "Codex"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return r.returncode == 0
     return False

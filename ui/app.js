@@ -463,7 +463,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.3.3';
+  const ver = state.version || u.app_version || '1.3.4';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -517,7 +517,7 @@ async function ensureSaved() {
 
 async function switchTo(a) {
   stopWaitLogin();
-  await refresh();
+  if (!state) await refresh();
   a = findAcc(a.id) || a;
   if (a.is_current) { toast(`现在登录的就是「${a.name}」`); return; }
   const g = await ensureSaved();
@@ -541,10 +541,10 @@ async function switchTo(a) {
       if (s && s.ok === false) toast(s.error, true);
     }
     setSteps(steps, steps.length);
-    await sleep(400);
     setBusy(false);
     toast(`已切换到「${a.name}」` + (launch ? '，Codex 正在启动' : ''));
-    setTimeout(() => refresh(true, true), 4500);
+    setTimeout(() => refresh(true, true), 1500);
+    setTimeout(() => refresh(true, true), 3500);
   } catch (e) {
     setBusy(false);
     toast(e.message, true);
@@ -613,7 +613,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.3.3';
+  const ver = (state && state.version) || u.app_version || '1.3.4';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');

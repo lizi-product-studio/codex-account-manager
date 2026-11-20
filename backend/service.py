@@ -262,7 +262,7 @@ class Service:
             self._backup_auth()
             atomic_write_bytes(paths.AUTH_FILE, target["data"])
             self.timeline.append(time.time(), tinfo["key"], "switch")
-            self.refresh_live_async(force=True, delay=2.5)
+            self.refresh_live_async(force=True, delay=0.2)
             return dict(ok=True, message="已切换到“%s”" % target["name"])
 
     def start_codex(self):
