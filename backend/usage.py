@@ -376,17 +376,18 @@ def account_status(usage, now):
     freshness : live（15 分钟内）/ stale（上次已知）/ reset（所有窗口都已过重置时间，预计已恢复）/ none
     """
     st = dict(remaining=None, level="none", freshness="none", recover_at=None,
-              next_reset=None, bottleneck=None, updated=None)
+              next_reset=None, reset_at=None, bottleneck=None, updated=None)
     if not usage or not usage.get("limits"):
         return st
     lim = usage["limits"][0]
     wins = lim["windows"]
     if not wins:
         return st
-    rem, bottleneck, all_reset, resets = 100.0, None, True, []
+    rem, bottleneck, all_reset, resets, past_resets = 100.0, None, True, [], []
     for w in wins:
         r = w.get("resets_at")
         if r and r <= now:
+            past_resets.append(r)
             continue
         all_reset = False
         if r:
@@ -397,6 +398,7 @@ def account_status(usage, now):
     st["remaining"] = round(rem)
     st["bottleneck"] = bottleneck["label"] if bottleneck else None
     st["next_reset"] = min(resets) if resets else None
+    st["reset_at"] = max(past_resets) if past_resets else None
     st["updated"] = usage["updated"]
     if (not all_reset and lim.get("reached")) or rem <= 0.5:
         st["remaining"] = 0

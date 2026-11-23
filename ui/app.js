@@ -11,9 +11,13 @@ let settings = {
   notify_enabled: true,
   auto_check_update: true,
   sort_mode: 'custom',
+  privacy_mode: false,
+  theme: 'auto',
 };
 let busy = false;
 let sortMode = localStorage.getItem('sortMode') || 'custom';   // custom | remaining
+let privacyMode = false;
+let themeMode = 'auto';                                        // auto | light | dark
 let lastRenderSig = '';
 let waitTimer = null;
 let dismissedUpdateSha = null;
@@ -27,6 +31,52 @@ const planName = (p) => (p ? PLAN_NAMES[p] || p : '未知套餐');
 // ------------------------------------------------------------------ 工具函数
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function maskEmail(email) {
+  const s = String(email || '');
+  if (!privacyMode || !s) return s;
+  const at = s.indexOf('@');
+  if (at <= 0) return s.slice(0, 2) + '***';
+  const local = s.slice(0, at);
+  const domain = s.slice(at + 1);
+  const keep = local.length <= 2 ? local.slice(0, 1) : local.slice(0, 2);
+  return `${keep}***@${domain}`;
+}
+async function copyEmail(rawEmail) {
+  if (!rawEmail) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(rawEmail);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = rawEmail;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    toast(`已复制邮箱：${maskEmail(rawEmail)}`);
+  } catch (e) {
+    toast('复制失败', true);
+  }
+}
+function applyTheme() {
+  const sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark = themeMode === 'dark' || (themeMode === 'auto' && sysDark);
+  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  const btn = $('btnTheme');
+  if (btn) {
+    const label = themeMode === 'auto' ? '◐ 自动' : themeMode === 'dark' ? '☾ 深色' : '☀ 浅色';
+    btn.textContent = label;
+  }
+}
+function updatePrivacyBtn() {
+  const btn = $('btnPrivacy');
+  if (!btn) return;
+  btn.classList.toggle('on', !!privacyMode);
+  btn.textContent = privacyMode ? '👁 已打码' : '👁 隐私';
 }
 const nowSec = () => Date.now() / 1000;
 const pad = (n) => String(n).padStart(2, '0');
@@ -214,6 +264,10 @@ async function loadSettings() {
   } else {
     sortMode = localStorage.getItem('sortMode') || 'custom';
   }
+  privacyMode = !!settings.privacy_mode;
+  themeMode = ['auto', 'light', 'dark'].includes(settings.theme) ? settings.theme : 'auto';
+  updatePrivacyBtn();
+  applyTheme();
 }
 async function setSetting(key, value) {
   try {
@@ -234,7 +288,9 @@ function freshTag(st) {
 
 function resetText(st) {
   if (!st || st.level === 'none') return '<span>暂无记录</span>';
-  if (st.freshness === 'reset') return '<span>已过重置时间</span>';
+  if (st.freshness === 'reset') {
+    return st.reset_at ? `<span>已于 ${fmtShort(st.reset_at)} 重置</span>` : '<span>已过重置时间</span>';
+  }
   if (st.level === 'out' && st.recover_at) {
     return `<b data-reset="${st.recover_at}">${fmtDuration(st.recover_at - nowSec())}</b> 后恢复 · ${fmtShort(st.recover_at)}`;
   }
@@ -242,6 +298,58 @@ function resetText(st) {
     return `${esc(st.bottleneck || '')}额度 · <b data-reset="${st.next_reset}">${fmtDuration(st.next_reset - nowSec())}</b> 后重置`;
   }
   return '<span>重置时间未知</span>';
+}
+
+function effectiveRemaining(st) {
+  if (!st || st.level === 'none') return -1;
+  if (st.freshness === 'reset') return 100;
+  return typeof st.remaining === 'number' ? st.remaining : -1;
+}
+
+function pickRecommendation() {
+  if (!state || !state.accounts || !state.accounts.length) return null;
+  const curAcc = state.accounts.find((a) => a.is_current);
+  const curSt = (curAcc && curAcc.status) || (state.current && state.current.status) || {};
+  const curRem = effectiveRemaining(curSt);
+
+  // 1. 当前号已用尽或剩余 <= 15%，推荐切到最优备用号
+  if (curRem >= 0 && (curRem <= 15 || curSt.level === 'out')) {
+    const cands = state.accounts
+      .filter((a) => a.valid && !a.is_current && effectiveRemaining(a.status) >= 30 && effectiveRemaining(a.status) > curRem + 15)
+      .slice();
+    if (cands.length) {
+      cands.sort((a, b) => {
+        const ra = effectiveRemaining(a.status);
+        const rb = effectiveRemaining(b.status);
+        if (Math.abs(rb - ra) > 5) return rb - ra;
+        const na = (a.status && a.status.next_reset) || Infinity;
+        const nb = (b.status && b.status.next_reset) || Infinity;
+        return na - nb;
+      });
+      const best = cands[0];
+      const bSt = best.status || {};
+      const bDesc = bSt.freshness === 'reset' ? '已重置 · 预计 100%' : `剩余 ${effectiveRemaining(bSt)}%`;
+      return {
+        kind: 'switch',
+        curName: (curAcc && curAcc.name) || (state.current && maskEmail(state.current.email)) || '当前账号',
+        curRem,
+        curOut: curSt.level === 'out' || curRem <= 0,
+        target: best,
+        targetDesc: bDesc,
+      };
+    }
+  }
+
+  // 2. 所有有效账号都已用尽，汇总最早恢复时间
+  const validAccs = state.accounts.filter((a) => a.valid && a.status && a.status.level !== 'none');
+  if (validAccs.length > 0 && validAccs.every((a) => a.status.level === 'out' && a.status.freshness !== 'reset')) {
+    const withRec = validAccs.filter((a) => a.status.recover_at && a.status.recover_at > nowSec());
+    if (withRec.length) {
+      withRec.sort((a, b) => a.status.recover_at - b.status.recover_at);
+      return { kind: 'all_out', earliest: withRec[0], recoverAt: withRec[0].status.recover_at };
+    }
+  }
+  return null;
 }
 
 // ------------------------------------------------------------------ 渲染：排序（当前使用永远优先排最前）
@@ -288,13 +396,15 @@ function renderOverview() {
     const rem = known ? (st.freshness === 'reset' ? 100 : st.remaining) : null;
     const stale = st.freshness === 'stale';
     const isOut = known && st.level === 'out';
-    const fillCls = st.level === 'low' ? 'amber' : '';
+    const fillCls = rem !== null && rem <= 10 ? 'red' : st.level === 'low' ? 'amber' : '';
     const bar = known
       ? (st.freshness === 'reset' ? '<div class="bar reset"></div>'
         : isOut ? '<div class="bar out"></div>'
           : `<div class="bar"><div class="fill ${fillCls}" style="width:${rem}%"></div></div>`)
       : '<div class="bar unknown"></div>';
     const tag = r.is_current ? `<span class="tag ${r.saved ? 'ok' : 'warn'}">${r.saved ? '当前' : '当前·未保存'}</span>` : '';
+    const rawPlan = r.plan || (r.usage && r.usage.plan);
+    const planTag = rawPlan ? `<span class="tag plan-sm">${esc(planName(rawPlan))}</span>` : '';
     let act;
     if (!r.saved) act = '<button class="btn sm primary" data-act="save">保存</button>';
     else if (r.is_current) act = '<span class="using">● 使用中</span>';
@@ -302,7 +412,7 @@ function renderOverview() {
     const remText = !known ? '—' : st.freshness === 'reset' ? '≈100%' : isOut ? '已用尽' : `${rem}%`;
     return `<div class="ov-row ${r.is_current ? 'current' : ''} ${stale ? 'stale' : ''}" data-id="${esc(r.id || '')}">
       <span class="dot ${known ? st.level : 'none'}" title="${LEVEL_TEXT[st.level] || ''}"></span>
-      <span class="ov-name" title="${esc(r.email)}">${esc(r.name)}${tag}</span>
+      <span class="ov-name" title="${esc(maskEmail(r.email))}">${esc(r.name)}${planTag}${tag}</span>
       ${bar}
       <span class="ov-rem ${known ? (isOut ? 'out' : '') : 'none'}">${remText}</span>
       <span class="ov-reset">${resetText(st)}</span>
@@ -389,7 +499,7 @@ function renderCard(a, rawIdx, total) {
         </div>
       </div>
     </div>
-    <div class="card-sub"><span>${esc(a.email)}</span><span class="tag">${esc(planName(a.plan || (usage && usage.plan)))}</span></div>
+    <div class="card-sub"><span class="copy-email" data-copy-email="${esc(a.email)}" title="点击复制邮箱">${esc(maskEmail(a.email))}</span><span class="tag">${esc(planName(a.plan || (usage && usage.plan)))}</span></div>
     ${meta ? `<div class="meta">${meta}</div>` : ''}
     ${a.note ? `<div class="card-note">${esc(a.note)}</div>` : ''}
     <div class="usage">${renderUsage(usage, a.is_current, stale)}</div>
@@ -411,8 +521,8 @@ function render(force = false) {
   if (!state) return;
   if (!force && document.querySelector('.card-menu-wrap.open')) return;
   const sig = JSON.stringify([
-    state.codex_running, sortMode, state.snapshots, state.current, state.accounts,
-    state.update, dismissedUpdateSha,
+    state.codex_running, sortMode, privacyMode, themeMode, state.snapshots,
+    state.current, state.accounts, state.update, dismissedUpdateSha,
   ]);
   if (!force && sig === lastRenderSig) return;
   lastRenderSig = sig;
@@ -423,12 +533,30 @@ function render(force = false) {
 
   const banner = $('banner');
   if (state.current.valid && !state.current.saved_id) {
-    banner.innerHTML = `<span>检测到当前登录的 <b>${esc(state.current.email)}</b> 还没有保存。保存后，以后切回这个号就不用再登录了。</span>
+    banner.innerHTML = `<span>检测到当前登录的 <b>${esc(maskEmail(state.current.email))}</b> 还没有保存。保存后，以后切回这个号就不用再登录了。</span>
       <span class="spacer"></span><button class="btn primary sm" id="bannerSave">立即保存</button>`;
     banner.hidden = false;
     $('bannerSave').onclick = saveCurrent;
   } else {
     banner.hidden = true;
+  }
+
+  const rec = pickRecommendation();
+  const rb = $('recBanner');
+  if (rec && rec.kind === 'switch') {
+    const curTxt = rec.curOut ? '额度已用尽' : `额度仅剩 ${rec.curRem}%`;
+    rb.className = 'banner rec';
+    rb.innerHTML = `<span>当前「<b>${esc(rec.curName)}</b>」${esc(curTxt)}，推荐切换到「<b>${esc(rec.target.name)}</b>」（${esc(rec.targetDesc)}）</span>
+      <span class="spacer"></span>
+      <button class="btn primary sm" id="btnRecSwitch">一键切换</button>`;
+    rb.hidden = false;
+    $('btnRecSwitch').onclick = () => switchTo(rec.target);
+  } else if (rec && rec.kind === 'all_out') {
+    rb.className = 'banner rec warn';
+    rb.innerHTML = `<span>所有账号当前均已用尽 · 最早恢复：「<b>${esc(rec.earliest.name)}</b>」将于 <b data-reset="${rec.recoverAt}">${fmtDuration(rec.recoverAt - nowSec())}</b> 后（${fmtShort(rec.recoverAt)}）恢复</span>`;
+    rb.hidden = false;
+  } else {
+    rb.hidden = true;
   }
 
   const u = state.update || {};
@@ -463,7 +591,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.3.4';
+  const ver = state.version || u.app_version || '1.4.0';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -613,7 +741,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.3.4';
+  const ver = (state && state.version) || u.app_version || '1.4.0';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');
@@ -739,6 +867,24 @@ function closeSettings() {
 // ------------------------------------------------------------------ 初始化
 async function init() {
   $('btnRefresh').onclick = () => refresh(false, true, true);
+  $('btnPrivacy').onclick = () => {
+    privacyMode = !privacyMode;
+    updatePrivacyBtn();
+    setSetting('privacy_mode', privacyMode);
+    render(true);
+  };
+  $('btnTheme').onclick = () => {
+    const order = ['auto', 'light', 'dark'];
+    themeMode = order[(order.indexOf(themeMode) + 1) % order.length];
+    applyTheme();
+    setSetting('theme', themeMode);
+    const names = { auto: '跟随系统', light: '浅色模式', dark: '深色模式' };
+    toast(`外观已切换为：${names[themeMode]}`);
+  };
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', () => { if (themeMode === 'auto') applyTheme(); });
+  }
   $('btnFolder').onclick = () => call('open_store').catch((e) => toast(e.message, true));
   $('btnUsagePage').onclick = () => call('open_usage_page').catch((e) => toast(e.message, true));
   $('btnSettings').onclick = openSettings;
@@ -774,8 +920,14 @@ async function init() {
     if (a) scrollToCard(a.id);
   });
 
-  // 卡片：⋯ 菜单展开/收起 + 卡片操作
+  // 卡片：点击邮箱复制 / ⋯ 菜单展开/收起 + 卡片操作
   $('list').addEventListener('click', (e) => {
+    const emailEl = e.target.closest('[data-copy-email]');
+    if (emailEl) {
+      e.stopPropagation();
+      copyEmail(emailEl.dataset.copyEmail);
+      return;
+    }
     const toggle = e.target.closest('[data-menu="toggle"]');
     if (toggle) {
       e.stopPropagation();
@@ -800,7 +952,7 @@ async function init() {
     if (!e.target.closest('.card-menu-wrap')) closeMenus();
   });
   $('list').addEventListener('dblclick', (e) => {
-    if (e.target.closest('button') || e.target.closest('.card-menu-wrap')) return;
+    if (e.target.closest('button') || e.target.closest('.card-menu-wrap') || e.target.closest('[data-copy-email]')) return;
     const card = e.target.closest('.card');
     const a = card && findAcc(card.dataset.id);
     if (a && !a.is_current && a.valid) switchTo(a);

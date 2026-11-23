@@ -17,6 +17,8 @@ DEFAULTS = {
     "notify_enabled": True,                    # 额度快用尽 / 已重置 / 订阅临期 / 新登录 / 新版本系统提醒
     "auto_check_update": True,                 # 自动检查 GitHub 仓库更新
     "sort_mode": "custom",                     # 总览排序模式：custom | remaining
+    "privacy_mode": False,                     # 隐私模式：对邮箱进行脱敏打码
+    "theme": "auto",                           # 主题外观：auto | light | dark
     "tray_hint_shown": False,                  # 是否提示过“已缩到托盘”
 }
 
@@ -33,6 +35,8 @@ def load():
     out = dict(DEFAULTS)
     out.update({k: v for k, v in s.items() if k in DEFAULTS})
     out["sort_mode"] = "remaining" if out.get("sort_mode") == "remaining" else "custom"
+    out["theme"] = out.get("theme") if out.get("theme") in ("auto", "light", "dark") else "auto"
+    out["privacy_mode"] = bool(out.get("privacy_mode", False))
     out["autostart"] = autostart_enabled()
     return out
 
@@ -47,6 +51,8 @@ def set_value(key, value):
     s = load()
     if key == "sort_mode":
         s[key] = "remaining" if str(value) == "remaining" else "custom"
+    elif key == "theme":
+        s[key] = str(value) if str(value) in ("auto", "light", "dark") else "auto"
     else:
         s[key] = bool(value)
         if key == "autostart":
