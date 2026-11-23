@@ -14,6 +14,7 @@ DEFAULTS = {
     "close_to_tray": sys.platform == "win32",  # 点 × 时缩到托盘（Windows）
     "autostart": False,                        # 开机启动
     "launch_after_switch": True,               # 切换后自动启动 Codex
+    "confirm_before_switch": True,             # 切换前弹窗确认（关闭后一键直切）
     "notify_enabled": True,                    # 额度快用尽 / 已重置 / 订阅临期 / 新登录 / 新版本系统提醒
     "auto_check_update": True,                 # 自动检查 GitHub 仓库更新
     "sort_mode": "custom",                     # 总览排序模式：custom | remaining

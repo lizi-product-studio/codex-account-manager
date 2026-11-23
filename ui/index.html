@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Codex 账号管家</title>
-<link rel="stylesheet" href="style.css?v=1.4.0">
+<link rel="stylesheet" href="style.css?v=1.4.1">
 </head>
 <body>
 <header class="topbar">
@@ -63,6 +63,8 @@
       <div><b>开机自动启动</b><span id="autostartDesc">开机后只在托盘显示，不弹窗口。</span></div></label>
     <label class="opt"><input type="checkbox" data-key="launch_after_switch">
       <div><b>切换后自动启动 Codex</b><span>关闭后，切换完需要你自己打开 Codex。</span></div></label>
+    <label class="opt"><input type="checkbox" data-key="confirm_before_switch">
+      <div><b>切换账号前弹窗确认</b><span>关闭后，双击卡片或点“切换”将直接秒切并重启 Codex，不再二次询问。</span></div></label>
     <label class="opt"><input type="checkbox" data-key="notify_enabled">
       <div><b>系统通知提醒</b><span>当前号剩余不足 15%、用尽的号恢复、订阅 3 天内到期或检测到新登录时提醒。</span></div></label>
     <label class="opt"><input type="checkbox" data-key="auto_check_update">
@@ -106,6 +108,6 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js?v=1.4.0"></script>
+<script src="app.js?v=1.4.1"></script>
 </body>
 </html>

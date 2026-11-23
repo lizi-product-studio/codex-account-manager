@@ -102,6 +102,14 @@ class UsageScanner:
         self.snaps = c["snaps"]
         self._keys = {(s[TS], s[LIMIT]) for s in self.snaps}
         self.last_scan = 0.0
+        self._last_save = time.time()
+        self._dirty_cache = False
+
+    def flush(self):
+        if self._dirty_cache or not os.path.exists(paths.USAGE_CACHE):
+            atomic_write_json(paths.USAGE_CACHE, {"v": CACHE_VERSION, "files": self.files, "snaps": self.snaps})
+            self._dirty_cache = False
+            self._last_save = time.time()
 
     def _candidates(self):
         roots = [os.path.join(paths.CODEX_HOME, "sessions")]
@@ -125,7 +133,10 @@ class UsageScanner:
                 out.append((f, st.st_size))
         return out
 
-    def scan(self):
+    def scan(self, force=False):
+        now = time.time()
+        if not force and self.last_scan > 0 and (now - self.last_scan) < 5.0:
+            return 0
         added = 0
         live = set()
         for path, size in self._candidates():
@@ -184,9 +195,12 @@ class UsageScanner:
             self.snaps = [s for s in self.snaps if s[TS] >= cutoff]
             self._keys = {(s[TS], s[LIMIT]) for s in self.snaps}
             dirty = True
-        if dirty or added or not os.path.exists(paths.USAGE_CACHE):
-            atomic_write_json(paths.USAGE_CACHE, {"v": CACHE_VERSION, "files": self.files, "snaps": self.snaps})
-        self.last_scan = time.time()
+        if dirty or added:
+            self._dirty_cache = True
+        now2 = time.time()
+        if (self._dirty_cache and (force or (now2 - self._last_save) >= 30.0)) or not os.path.exists(paths.USAGE_CACHE):
+            self.flush()
+        self.last_scan = now2
         return added
 
 

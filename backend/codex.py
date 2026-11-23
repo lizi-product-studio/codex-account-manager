@@ -21,6 +21,7 @@ if IS_WIN:
     _TH32CS_SNAPPROCESS = 0x00000002
     _PROCESS_TERMINATE = 0x0001
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _SYNCHRONIZE = 0x00100000
 
     _k32 = ctypes.windll.kernel32
 
@@ -46,6 +47,10 @@ if IS_WIN:
     ]
     _k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
     _k32.TerminateProcess.restype = wintypes.BOOL
+    _k32.WaitForMultipleObjects.argtypes = [
+        wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE), wintypes.BOOL, wintypes.DWORD,
+    ]
+    _k32.WaitForMultipleObjects.restype = wintypes.DWORD
     _k32.CloseHandle.argtypes = [wintypes.HANDLE]
 
     _FILTER = r"""
@@ -167,63 +172,76 @@ def is_running():
         return False
 
 
-def _win_terminate_pid(pid):
-    h = _k32.OpenProcess(_PROCESS_TERMINATE, False, pid)
-    if not h:
-        return False
+def _win_terminate_and_wait(pids, timeout_ms=280):
+    handles = []
     try:
-        return bool(_k32.TerminateProcess(h, 0))
+        for pid in pids:
+            h = _k32.OpenProcess(_PROCESS_TERMINATE | _SYNCHRONIZE, False, pid)
+            if h:
+                _k32.TerminateProcess(h, 0)
+                handles.append(h)
+            else:
+                h2 = _k32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+                if h2:
+                    _k32.TerminateProcess(h2, 0)
+                    _k32.CloseHandle(h2)
+        if handles:
+            # WaitForMultipleObjects 单次最多等待 64 个内核句柄，进程全部退出那 1ms 立即唤醒返回
+            batch = handles[:64]
+            arr = (wintypes.HANDLE * len(batch))(*batch)
+            _k32.WaitForMultipleObjects(len(batch), arr, True, timeout_ms)
     finally:
-        _k32.CloseHandle(h)
+        for h in handles:
+            _k32.CloseHandle(h)
 
 
 def stop():
     """关闭 Codex 桌面版及其全部子进程。返回 (ok: bool, remaining_names: str)。"""
     if IS_WIN:
-        if not list_processes():
+        rem = list_processes()
+        if not rem:
             return True, ""
-        # 直接通过 Win32 TerminateProcess 终止（先父进程 ChatGPT 再子进程，避免 PowerShell 冷启动与 2.5s 无效等待）
+        # 直接通过 Win32 TerminateProcess + WaitForMultipleObjects 零轮询空等终止
         start_t = time.monotonic()
-        deadline = start_t + 6.0
+        deadline = start_t + 5.0
         taskkill_tried = False
-        while time.monotonic() < deadline:
+        while True:
+            parents = [p["Id"] for p in rem if p.get("Name") == "ChatGPT"]
+            others = [p["Id"] for p in rem if p.get("Name") != "ChatGPT"]
+            _win_terminate_and_wait(parents + others, timeout_ms=260)
             rem = list_processes()
-            if not rem:
-                return True, ""
-            parents = [p for p in rem if p.get("Name") == "ChatGPT"]
-            others = [p for p in rem if p.get("Name") != "ChatGPT"]
-            for p in parents + others:
-                _win_terminate_pid(p["Id"])
-            if not taskkill_tried and parents and (time.monotonic() - start_t) >= 1.2:
+            if not rem or time.monotonic() >= deadline:
+                break
+            if not taskkill_tried and parents and (time.monotonic() - start_t) >= 0.8:
                 taskkill_tried = True
                 try:
                     subprocess.run(
                         ["taskkill.exe", "/F", "/T", "/IM", "ChatGPT.exe"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        timeout=5, creationflags=CREATE_NO_WINDOW,
+                        timeout=4, creationflags=CREATE_NO_WINDOW,
                     )
                 except Exception:
                     pass
-            time.sleep(0.08)
+                rem = list_processes()
+                if not rem:
+                    break
+            time.sleep(0.015)
 
-        rem = list_processes()
         if not rem:
             return True, ""
         return False, ",".join(sorted({p.get("Name") or "Codex" for p in rem}))
     elif IS_MAC:
-        if not list_processes():
+        rem = list_processes()
+        if not rem:
             return True, ""
-        # 直接发 SIGTERM（主进程优先，高频 80ms 轮询），0.8s 后对顽固残留升级 SIGKILL
+        # 先发 SIGTERM（主进程优先，25ms 极速轮询），120ms 后对未退出的子进程立即升级 SIGKILL
         retry_start = time.monotonic()
-        retry_deadline = retry_start + 5.0
+        retry_deadline = retry_start + 4.0
         sent_term = set()
-        while time.monotonic() < retry_deadline:
-            rem = list_processes()
-            if not rem:
-                return True, ""
+        while True:
             rem.sort(key=lambda p: (0 if p.get("Main") else 1))
             elapsed = time.monotonic() - retry_start
-            if elapsed < 0.8:
+            if elapsed < 0.12:
                 for p in rem:
                     pid = p["Id"]
                     if pid not in sent_term:
@@ -238,9 +256,11 @@ def stop():
                         os.kill(p["Id"], signal.SIGKILL)
                     except (ProcessLookupError, PermissionError, OSError):
                         pass
-            time.sleep(0.08)
+            time.sleep(0.025)
+            rem = list_processes()
+            if not rem or time.monotonic() >= retry_deadline:
+                break
 
-        rem = list_processes()
         if not rem:
             return True, ""
         return False, ",".join(sorted({p.get("Name") or "Codex" for p in rem}))
@@ -271,15 +291,20 @@ def start():
         pfn = package_family()
         if not pfn:
             return False
-        subprocess.Popen(["explorer.exe", "shell:AppsFolder\\%s!App" % pfn], creationflags=CREATE_NO_WINDOW)
-        return True
+        target = "shell:AppsFolder\\%s!App" % pfn
+        try:
+            os.startfile(target)
+            return True
+        except OSError:
+            subprocess.Popen(["explorer.exe", target], creationflags=CREATE_NO_WINDOW)
+            return True
     elif IS_MAC:
         for app_path in ("/Applications/Codex.app", os.path.expanduser("~/Applications/Codex.app")):
             if os.path.isdir(app_path):
                 subprocess.Popen(["open", app_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return True
-        r = subprocess.run(["open", "-a", "Codex"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return r.returncode == 0
+        subprocess.Popen(["open", "-a", "Codex"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
     return False
 
 

@@ -8,6 +8,7 @@ let settings = {
   close_to_tray: true,
   autostart: false,
   launch_after_switch: true,
+  confirm_before_switch: true,
   notify_enabled: true,
   auto_check_update: true,
   sort_mode: 'custom',
@@ -591,7 +592,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.4.0';
+  const ver = state.version || u.app_version || '1.4.1';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -650,34 +651,39 @@ async function switchTo(a) {
   if (a.is_current) { toast(`现在登录的就是「${a.name}」`); return; }
   const g = await ensureSaved();
   if (!g.go) return;
-  if (state.codex_running) {
-    const ok = await confirmBox('切换账号',
-      `切换到：${a.name}（${a.email}）\n\n需要先关闭 Codex，正在进行的任务会被中断。`, '关闭 Codex 并切换');
-    if (!ok) return;
+  if (state.codex_running && settings.confirm_before_switch !== false) {
+    const ans = await dialog({
+      title: '切换账号',
+      body: `切换到：${a.name}（${maskEmail(a.email)}）\n\n需要先关闭 Codex，正在进行的任务会被中断。`,
+      buttons: [
+        { id: 'cancel', text: '取消' },
+        { id: 'never', text: '切换（不再提示）' },
+        { id: 'ok', text: '关闭并切换', kind: 'primary' },
+      ],
+    });
+    if (ans.id === 'cancel') return;
+    if (ans.id === 'never') setSetting('confirm_before_switch', false);
   }
   const launch = !!settings.launch_after_switch;
-  const steps = ['关闭 Codex', '同步并写入账号凭证'].concat(launch ? ['启动 Codex'] : []);
+  const steps = ['关闭 Codex 并写入新凭证'].concat(launch ? ['启动 Codex'] : []);
   setBusy(true, `正在切换到「${a.name}」`, steps);
   try {
-    await call('stop_codex');
-    setSteps(steps, 1);
-    const r = await call('apply_switch', a.id, g.force);
+    const r = await call('switch_account', a.id, launch, g.force);
     if (r.need_save) throw new Error('请先保存当前登录');
-    if (launch) {
-      setSteps(steps, 2);
-      const s = await api().start_codex();
-      if (s && s.ok === false) toast(s.error, true);
-    }
     setSteps(steps, steps.length);
+    if (r.state) {
+      state = r.state;
+      render(true);
+    }
     setBusy(false);
-    toast(`已切换到「${a.name}」` + (launch ? '，Codex 正在启动' : ''));
+    toast(r.message || (`已切换到「${a.name}」` + (launch ? '，Codex 正在启动' : '')));
     setTimeout(() => refresh(true, true), 1500);
     setTimeout(() => refresh(true, true), 3500);
   } catch (e) {
     setBusy(false);
     toast(e.message, true);
+    await refresh(true, true);
   }
-  await refresh(true, true);
 }
 window.switchById = async (id) => {
   if (!state) await refresh();
@@ -741,7 +747,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.4.0';
+  const ver = (state && state.version) || u.app_version || '1.4.1';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');

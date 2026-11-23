@@ -43,6 +43,10 @@ class Service:
     def close(self):
         self._stop.set()
         self.updater.close()
+        try:
+            self.scanner.flush()
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- 内部
     @staticmethod
@@ -159,10 +163,11 @@ class Service:
         return cur["valid"] and not self.store.find_by_key(cur["key"])
 
     # ---------------------------------------------------------------- 查询
-    def get_state(self):
+    def get_state(self, scan=True):
         with self.lock:
             now = time.time()
-            self.scanner.scan()
+            if scan:
+                self.scanner.scan()
             cur, _, mtime = self._current()
             self._observe(cur, mtime, now)
             saved = self._sync_current()
@@ -301,7 +306,8 @@ class Service:
                     msg += "，Codex 正在启动"
                 else:
                     msg += "，但没找到 Codex 桌面版，请手动打开"
-            return dict(ok=True, message=msg)
+            self.refresh_live_async(force=True, delay=2.2 if launch else 0.3)
+            return dict(ok=True, message=msg, state=self.get_state(scan=False))
 
     def add_new(self, launch=True, force=False):
         with self.lock:
