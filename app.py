@@ -75,8 +75,8 @@ class Api:
             return {"ok": True, "state": st}
         return _safe(run)()
 
-    def refresh_live(self):
-        return _safe(lambda: self._svc.refresh_live(force=True))()
+    def refresh_live(self, force=True):
+        return _safe(lambda: self._svc.refresh_live(force=bool(force)))()
 
     def save_current(self, name, note=""):
         return _safe(self._svc.save_current)(name, note)

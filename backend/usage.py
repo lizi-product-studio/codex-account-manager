@@ -135,7 +135,7 @@ class UsageScanner:
 
     def scan(self, force=False):
         now = time.time()
-        if not force and self.last_scan > 0 and (now - self.last_scan) < 5.0:
+        if not force and self.last_scan > 0 and (now - self.last_scan) < 1.5:
             return 0
         added = 0
         live = set()

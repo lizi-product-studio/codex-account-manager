@@ -68,7 +68,7 @@ class Service:
             ts = estimate_switch_time(self.scanner.snaps, tl, tl.current_key(), tl.last_seen, mtime, now)
             tl.append(ts, key, "detected")
             if key:
-                self.refresh_live_async(force=True, delay=2.0)
+                self.refresh_live_async(force=True, delay=1.2, retries=2)
         tl.touch(now)
 
     def _current_low_remaining(self, key):
@@ -91,17 +91,20 @@ class Service:
         key = cur["key"]
         now = time.time()
         if force:
-            min_gap = 5
+            min_gap = 3
         elif self._current_low_remaining(key):
-            min_gap = 60
+            min_gap = 30
+        elif self.codex_running:
+            min_gap = 45
         else:
-            min_gap = 180
+            min_gap = 120
         if now - self._last_live_at.get(key, 0) < min_gap:
             return dict(ok=True, cached=True)
         if not self._live_lock.acquire(blocking=False):
             return dict(ok=True, busy=True)
         try:
-            self._last_live_at[key] = now
+            # 先写一个短期占位时间戳（失败时仅冷却 6 秒即自动重试，成功后才写入完整时间戳）
+            self._last_live_at[key] = now - min_gap + 6
             if not codex.find_codex_exe():
                 return dict(ok=False, error="未找到本机 codex 可执行文件")
             acct_id, items = codex.read_live_rate_limits()
@@ -119,19 +122,27 @@ class Service:
                 return dict(ok=False, error="未返回额度数据")
             with self.lock:
                 self.live_usage[key] = snaps
+                self._last_live_at[key] = ts
                 atomic_write_json(paths.LIVE_USAGE, self.live_usage)
             return dict(ok=True, updated=ts)
         finally:
             self._live_lock.release()
 
-    def refresh_live_async(self, force=False, delay=0.0):
+    def refresh_live_async(self, force=False, delay=0.0, retries=0):
         def _run():
             if delay > 0 and self._stop.wait(delay):
                 return
-            try:
-                self.refresh_live(force=force)
-            except Exception:
-                pass
+            for attempt in range(retries + 1):
+                if self._stop.is_set():
+                    return
+                try:
+                    r = self.refresh_live(force=force or attempt > 0)
+                    if r.get("ok") and (r.get("updated") or r.get("cached")):
+                        return
+                except Exception:
+                    pass
+                if attempt < retries and self._stop.wait(2.5 * (attempt + 1)):
+                    return
         threading.Thread(target=_run, daemon=True).start()
 
     def _sync_current(self):
@@ -191,6 +202,10 @@ class Service:
                     usage=u, status=account_status(u, now),
                 ))
             cu = usage.get(cur["key"]) if cur["valid"] else None
+            cur_status = account_status(cu, now)
+            # 若当前登录账号还没有实时数据（例如刚重置完显示“预计 100%”或还是旧数据），自动在后台触发一次实时同步
+            if cur["valid"] and cur["mode"] == "chatgpt" and cur_status["freshness"] in ("reset", "stale", "none"):
+                self.refresh_live_async(force=False)
             return dict(
                 now=now,
                 version=paths.APP_VERSION,
@@ -203,7 +218,7 @@ class Service:
                     sub_until=cur["sub_until"], last_refresh=cur["last_refresh"],
                     saved_id=saved["id"] if saved else None,
                     saved_name=saved["name"] if saved else None,
-                    usage=cu, status=account_status(cu, now),
+                    usage=cu, status=cur_status,
                     forecast=forecasts.get(cur["key"]) if cur["valid"] else None,
                 ),
                 accounts=accounts,
@@ -267,8 +282,8 @@ class Service:
             self._backup_auth()
             atomic_write_bytes(paths.AUTH_FILE, target["data"])
             self.timeline.append(time.time(), tinfo["key"], "switch")
-            delay = 2.2 if settings.load().get("launch_after_switch", True) else 0.3
-            self.refresh_live_async(force=True, delay=delay)
+            delay = 1.2 if settings.load().get("launch_after_switch", True) else 0.2
+            self.refresh_live_async(force=True, delay=delay, retries=2)
             return dict(ok=True, message="已切换到“%s”" % target["name"])
 
     def start_codex(self):
@@ -306,7 +321,7 @@ class Service:
                     msg += "，Codex 正在启动"
                 else:
                     msg += "，但没找到 Codex 桌面版，请手动打开"
-            self.refresh_live_async(force=True, delay=2.2 if launch else 0.3)
+            self.refresh_live_async(force=True, delay=1.2 if launch else 0.2, retries=2)
             return dict(ok=True, message=msg, state=self.get_state(scan=False))
 
     def add_new(self, launch=True, force=False):

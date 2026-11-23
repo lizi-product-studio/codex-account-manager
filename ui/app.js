@@ -228,8 +228,14 @@ async function refresh(silent = true, forceRender = false, syncLive = false) {
     btn.textContent = '⟳ 刷新中…';
   }
   try {
-    if (syncLive) {
-      try { liveRes = await api().refresh_live(); } catch (e) { /* 离线时自动回退本地日志 */ }
+    if (manualSync) {
+      try { liveRes = await api().refresh_live(true); } catch (e) { /* 离线时自动回退本地日志 */ }
+    } else if (syncLive) {
+      const curFresh = state && state.current && state.current.status && state.current.status.freshness;
+      const needForce = !!(curFresh && curFresh !== 'live');
+      api().refresh_live(needForce).then((lr) => {
+        if (lr && lr.updated && !busy) refresh(true, true, false);
+      }).catch(() => {});
     }
     const r = await call('get_state');
     state = r.state;
@@ -592,7 +598,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.4.1';
+  const ver = state.version || u.app_version || '1.4.2';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -677,8 +683,7 @@ async function switchTo(a) {
     }
     setBusy(false);
     toast(r.message || (`已切换到「${a.name}」` + (launch ? '，Codex 正在启动' : '')));
-    setTimeout(() => refresh(true, true), 1500);
-    setTimeout(() => refresh(true, true), 3500);
+    [1500, 3500, 6000, 9000].forEach((ms) => setTimeout(() => refresh(true, true), ms));
   } catch (e) {
     setBusy(false);
     toast(e.message, true);
@@ -747,7 +752,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.4.1';
+  const ver = (state && state.version) || u.app_version || '1.4.2';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');
@@ -983,11 +988,12 @@ async function init() {
 
   await loadSettings();
   await refresh(true, true);
-  setTimeout(() => refresh(true, true), 2500);
-  setInterval(() => { if (!document.hidden) refresh(); }, 15000);
+  setTimeout(() => refresh(true, true), 1200);
+  setTimeout(() => refresh(true, true), 3200);
+  setInterval(() => { if (!document.hidden) refresh(); }, 5000);
   setInterval(tick, 1000);
-  window.addEventListener('focus', () => refresh());
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  window.addEventListener('focus', () => refresh(true, false, true));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true, false, true); });
 }
 
 if (window.pywebview && window.pywebview.api) init();
