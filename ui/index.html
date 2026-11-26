@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Codex 账号管家</title>
-<link rel="stylesheet" href="style.css?v=1.6.1">
+<link rel="stylesheet" href="style.css?v=1.7.0">
 </head>
 <body>
 <header class="topbar">
@@ -47,12 +47,25 @@
 
 <!-- 放空小站 -->
 <div class="mask" id="breakPanel" hidden>
+  <canvas class="bp-fx-canvas" id="bpFxCanvas" aria-hidden="true"></canvas>
   <div class="dialog wide bp">
     <div class="bp-head">
       <div class="dialog-title">☕ 放空小站</div>
       <span class="bp-level" id="bpLevel"></span>
       <span class="spacer"></span>
       <button class="btn ghost sm" id="bpClose">关闭</button>
+    </div>
+    <div class="bp-stage" id="bpStage">
+      <div class="bp-orb-box">
+        <canvas id="bp3dCanvas" title="拖拽 360° 旋转 · 点击释放能量"></canvas>
+        <div class="bp-model-bar" id="bpModelBar">
+          <button type="button" class="bp-mbtn" data-model="crystal">💎 晶核</button>
+          <button type="button" class="bp-mbtn" data-model="planet">🪐 星球</button>
+          <button type="button" class="bp-mbtn" data-model="coffee">☕ 咖啡</button>
+        </div>
+        <div class="bp-orb-hint">拖拽 360° 旋转 · 点击释放能量</div>
+      </div>
+      <div class="bp-stage-r" id="bpHeroInfo"></div>
     </div>
     <div id="breakPanelBody"></div>
     <div class="bp-foot">
@@ -141,6 +154,7 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js?v=1.6.1"></script>
+<script src="break3d.js?v=1.7.0"></script>
+<script src="app.js?v=1.7.0"></script>
 </body>
 </html>

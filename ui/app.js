@@ -611,7 +611,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.6.1';
+  const ver = state.version || u.app_version || '1.7.0';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -766,7 +766,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.6.1';
+  const ver = (state && state.version) || u.app_version || '1.7.0';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');
@@ -949,6 +949,27 @@ function renderBreaks() {
   }
 }
 
+function syncBreak3DState() {
+  if (!window.Break3D) return;
+  const b = state && state.breaks;
+  const stageEl = $('bpStage');
+  if (!b) return;
+  const now = nowSec();
+  const act = b.active;
+  const targetSec = Math.max(60, (b.target_minutes || 10) * 60);
+  const elapsed = act ? Math.max(0, now - act.start) : 0;
+  const over = !!(act && elapsed >= targetSec);
+  const mode = act ? (over ? 'over' : 'active') : 'idle';
+  if (stageEl) {
+    stageEl.className = 'bp-stage' + (mode === 'active' ? ' on' : mode === 'over' ? ' over' : '');
+  }
+  window.Break3D.sync(mode, act ? elapsed / targetSec : 0);
+  const curModel = window.Break3D.getModel();
+  document.querySelectorAll('#bpModelBar [data-model]').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.model === curModel);
+  });
+}
+
 function tickBreaks() {
   const b = state && state.breaks;
   if (!b) return;
@@ -959,6 +980,7 @@ function tickBreaks() {
   document.querySelectorAll('[data-brk-since]').forEach((el) => {
     el.textContent = fmtDur(now - Number(el.dataset.brkSince));
   });
+  if (!$('breakPanel').hidden) syncBreak3DState();
   if (b.enabled && b.active && !$('breakBanner').classList.contains('over') && now - b.active.start >= b.target_minutes * 60) {
     renderBreaks();
   }
@@ -967,7 +989,9 @@ function tickBreaks() {
 function renderBreakPanel(force = false) {
   const b = state && state.breaks;
   const box = $('breakPanelBody');
+  const heroBox = $('bpHeroInfo');
   if (!b) { box.innerHTML = '<div class="muted">正在读取…</div>'; return; }
+  syncBreak3DState();
   const sig = JSON.stringify(b);
   if (!force && sig === breakPanelSig) return;
   breakPanelSig = sig;
@@ -980,35 +1004,35 @@ function renderBreakPanel(force = false) {
     + (b.streak ? ` · 🔥 连续 ${b.streak} 天` : '');
 
   const chips = (b.tags || []).map((x) => `<button class="chip" data-bp="start" data-tag="${esc(x.id)}">${esc(x.label)}</button>`).join('');
-  const hero = act
-    ? `<div class="bp-hero on">
+  heroBox.innerHTML = act
+    ? `<div class="bp-hero-top">
         <div class="bp-hero-l">
-          <div class="bp-cap">正在放空${act.tag ? ' · ' + esc(tagLabel(b, act.tag)) : ''}</div>
+          <div class="bp-cap"><span class="bp-breath-dot"></span>正在放空${act.tag ? ' · ' + esc(tagLabel(b, act.tag)) : ''}</div>
           <div class="bp-timer" data-brk-elapsed="${act.start}">${fmtClock(now - act.start)}</div>
-          <div class="bp-sub">${fmtHM(act.start)} 出发 · 建议 ${breakRange(b)} 分钟</div>
+          <div class="bp-sub">${fmtHM(act.start)} 出发 · 建议 ${breakRange(b)} 分钟 · 戳一戳左边 3D 球解压</div>
         </div>
         <div class="bp-hero-r">
           <button class="btn primary bp-big" data-bp="end">✅ 已回来</button>
           <button class="btn sm ghost" data-bp="cancel">不算这次</button>
         </div>
       </div>`
-    : `<div class="bp-hero">
+    : `<div class="bp-hero-top">
         <div class="bp-hero-l">
           <div class="bp-cap">${b.since_last ? '距离上次放空' : '今天还没放空过'}</div>
-          <div class="bp-timer">${b.since_last ? `<span data-brk-since="${b.since_last}">${fmtDur(now - b.since_last)}</span>` : '☕'}</div>
+          <div class="bp-timer">${b.since_last ? `<span data-brk-since="${b.since_last}">${fmtDur(now - b.since_last)}</span>` : '准备出发'}</div>
           <div class="bp-sub">想走就走，回来点「已回来」就会记下这次放空</div>
         </div>
         <div class="bp-hero-r"><button class="btn primary bp-big" data-bp="start">☕ 去放空</button></div>
       </div>
-      <div class="bp-chips"><span class="muted small">或者选个理由出发：</span>${chips}</div>`;
+      <div class="bp-chips"><span class="muted small">选个理由出发：</span>${chips}</div>`;
 
   const goalPct = Math.min(100, Math.round((t.count / Math.max(1, b.goal)) * 100));
   const stats = `<div class="bp-stats">
-      <div class="bp-stat"><div class="k">今日次数</div><div class="v">${t.count}<small> / 目标 ${b.goal}</small></div>
+      <div class="bp-stat" data-tilt="9"><div class="k">今日次数</div><div class="v">${t.count}<small> / 目标 ${b.goal}</small></div>
         <div class="bar"><div class="fill ${t.count >= b.goal ? '' : 'amber'}" style="width:${goalPct}%"></div></div></div>
-      <div class="bp-stat"><div class="k">今日总时长</div><div class="v">${t.count ? fmtDur(t.total_sec) : '—'}</div></div>
-      <div class="bp-stat"><div class="k">平均每次</div><div class="v">${t.count ? fmtDur(t.avg_sec) : '—'}</div></div>
-      <div class="bp-stat"><div class="k">最长一次</div><div class="v">${t.count ? fmtDur(t.longest_sec) : '—'}</div></div>
+      <div class="bp-stat" data-tilt="9"><div class="k">今日总时长</div><div class="v">${t.count ? fmtDur(t.total_sec) : '—'}</div></div>
+      <div class="bp-stat" data-tilt="9"><div class="k">平均每次</div><div class="v">${t.count ? fmtDur(t.avg_sec) : '—'}</div></div>
+      <div class="bp-stat" data-tilt="9"><div class="k">最长一次</div><div class="v">${t.count ? fmtDur(t.longest_sec) : '—'}</div></div>
     </div>`;
 
   const recs = t.records.length
@@ -1022,30 +1046,40 @@ function renderBreakPanel(force = false) {
     : '<div class="muted small bp-empty">今天还没有放空记录，点上面的「去放空」开始吧</div>';
 
   const maxMin = Math.max(10, ...b.week.map((d) => d.total_sec / 60));
-  const week = b.week.map((d) => `<div class="bp-col ${d.today ? 'today' : ''}" title="${d.date} · ${d.count} 次 · ${fmtDur(d.total_sec)}">
+  const week = b.week.map((d, idx) => {
+    const pct = d.total_sec > 0 ? Math.max(6, Math.round((d.total_sec / 60 / maxMin) * 100)) : 0;
+    return `<div class="bp-col ${d.today ? 'today' : ''}" title="${d.date} · ${d.count} 次 · ${fmtDur(d.total_sec)}">
       <div class="n">${d.count || ''}</div>
-      <div class="bp-barv"><div style="height:${Math.round((d.total_sec / 60 / maxMin) * 100)}%"></div></div>
+      <div class="bp-barv">${pct ? `<div class="bp-prism" style="height:${pct}%;--d:${idx * 55}ms"></div>` : ''}</div>
       <div class="l">${d.label}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   const got = b.badges.filter((x) => x.got).length;
-  const badges = b.badges.map((x) => `<div class="bp-badge ${x.got ? 'got' : ''}" title="${esc(x.desc)}${x.got ? '（已解锁）' : '（未解锁）'}"><span class="i">${x.icon}</span><span>${esc(x.name)}</span></div>`).join('');
+  const badges = b.badges.map((x) => `<div class="bp-badge ${x.got ? 'got' : ''}" ${x.got ? 'data-tilt="12" data-badge-spin="1"' : ''} title="${esc(x.desc)}${x.got ? '（已解锁 · 点击翻转炫耀）' : '（未解锁）'}"><span class="i">${x.icon}</span><span>${esc(x.name)}</span></div>`).join('');
 
-  box.innerHTML = hero + stats
+  box.innerHTML = stats
     + `<div class="bp-sec"><div class="bp-h">今日记录 <span class="muted small">${t.count} 次</span></div><div class="bp-recs">${recs}</div></div>
       <div class="bp-cols2">
-        <div class="bp-sec"><div class="bp-h">最近 7 天 <span class="muted small">柱高 = 放空时长，数字 = 次数</span></div><div class="bp-week">${week}</div></div>
+        <div class="bp-sec"><div class="bp-h">最近 7 天 <span class="muted small">3D 光柱 = 放空时长，数字 = 次数</span></div><div class="bp-week">${week}</div></div>
         <div class="bp-sec"><div class="bp-h">成就 <span class="muted small">${got}/${b.badges.length}</span></div><div class="bp-badges">${badges}</div></div>
       </div>`;
   $('bpMinutes').value = String(b.target_minutes);
   $('bpGoal').value = String(b.goal);
+  if (window.Break3D) window.Break3D.bindTilts(box);
 }
 
 function openBreakPanel() {
-  renderBreakPanel(true);
   $('breakPanel').hidden = false;
+  renderBreakPanel(true);
+  if (window.Break3D) {
+    window.Break3D.start();
+    syncBreak3DState();
+    window.Break3D.pulse(0.7, false);
+  }
 }
 function closeBreakPanel() {
   $('breakPanel').hidden = true;
+  if (window.Break3D) window.Break3D.stop();
 }
 
 async function breakAction(action, arg = null) {
@@ -1056,14 +1090,22 @@ async function breakAction(action, arg = null) {
   try {
     const r = await call('break_action', action, arg);
     if (state && r.breaks) state.breaks = r.breaks;
-    if (action === 'start') toast('出发放空 ☕ 回来记得点「已回来」');
-    else if (action === 'end') {
+    if (action === 'start') {
+      toast('出发放空 ☕ 回来记得点「已回来」');
+      if (window.Break3D && !$('breakPanel').hidden) window.Break3D.pulse(1.3, '出发放空 ☕');
+    } else if (action === 'end') {
       const dur = prev ? Math.max(0, Math.round(nowSec() - prev.start)) : 0;
       if (prev && dur < 20) toast(`这次放空 ${fmtDur(dur)}（不足 20 秒，未计入记录）`);
-      else toast(prev ? `欢迎回来！这次放空 ${fmtDur(dur)}，今天第 ${r.breaks.today.count} 次` : '欢迎回来！');
+      else {
+        toast(prev ? `欢迎回来！这次放空 ${fmtDur(dur)}，今天第 ${r.breaks.today.count} 次` : '欢迎回来！');
+        if (window.Break3D && !$('breakPanel').hidden) window.Break3D.celebrate(false, 0.55, 0.28);
+      }
     } else if (action === 'cancel') toast('好的，这次不计入记录');
     else if (action === 'delete') toast('已删除这条记录');
     if (r.new_badges && r.new_badges.length) {
+      if (window.Break3D && !$('breakPanel').hidden) {
+        setTimeout(() => window.Break3D.celebrate(true, 0.72, 0.72), 450);
+      }
       setTimeout(() => toast(`🏅 解锁成就：${r.new_badges.join('、')}`), 2200);
     }
     renderBreaks();
@@ -1155,6 +1197,25 @@ async function init() {
   $('bpClose').onclick = closeBreakPanel;
   $('breakPanel').addEventListener('click', (e) => {
     if (e.target === $('breakPanel')) { closeBreakPanel(); return; }
+    const modelBtn = e.target.closest('[data-model]');
+    if (modelBtn && window.Break3D) {
+      window.Break3D.setModel(modelBtn.dataset.model);
+      syncBreak3DState();
+      return;
+    }
+    const badgeEl = e.target.closest('[data-badge-spin]');
+    if (badgeEl) {
+      badgeEl.classList.remove('spin3d');
+      void badgeEl.offsetWidth;
+      badgeEl.classList.add('spin3d');
+      if (window.Break3D) {
+        const br = badgeEl.getBoundingClientRect();
+        const ox = window.innerWidth ? (br.left + br.width * 0.5) / window.innerWidth : 0.65;
+        const oy = window.innerHeight ? (br.top + br.height * 0.5) / window.innerHeight : 0.68;
+        window.Break3D.celebrate(true, ox, oy);
+      }
+      return;
+    }
     const btn = e.target.closest('[data-bp]');
     if (!btn) return;
     const act = btn.dataset.bp;
