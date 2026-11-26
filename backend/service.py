@@ -10,6 +10,7 @@ import webbrowser
 from . import codex, paths, settings
 from .auth import read_auth
 from .store import AccountStore, StoreError
+from .breaks import BreakTimer
 from .updater import Updater
 from .usage import (Timeline, UsageScanner, account_status, burn_forecasts, estimate_switch_time,
                     seed_time, snap_from_rpc, summarize)
@@ -29,6 +30,7 @@ class Service:
         self._last_live_at = {}
         self.codex_running = codex.is_running()
         self.updater = Updater(app_version=paths.APP_VERSION)
+        self.breaks = BreakTimer()
         self._stop = threading.Event()
         threading.Thread(target=self._watch_codex, daemon=True).start()
         self.refresh_live_async()
@@ -43,6 +45,7 @@ class Service:
     def close(self):
         self._stop.set()
         self.updater.close()
+        self.breaks.stop()
         try:
             self.scanner.flush()
         except Exception:
@@ -213,6 +216,7 @@ class Service:
                 codex_running=self.codex_running,
                 store_dir=paths.STORE_DIR,
                 update=self.updater.get_status(),
+                breaks=self.breaks.status(),
                 current=dict(
                     valid=cur["valid"], email=cur["email"], plan=cur["plan"],
                     sub_until=cur["sub_until"], last_refresh=cur["last_refresh"],

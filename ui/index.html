@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8">
 <title>Codex 账号管家</title>
-<link rel="stylesheet" href="style.css?v=1.4.2">
+<link rel="stylesheet" href="style.css?v=1.5.0">
 </head>
 <body>
 <header class="topbar">
   <div class="brand"><span class="logo">◆</span>Codex 账号管家</div>
   <span class="pill" id="codexStatus">检测中…</span>
+  <button class="pill break-pill" id="breakPill" hidden></button>
   <div class="spacer"></div>
   <button class="btn ghost" id="btnPrivacy" title="隐私模式：隐藏邮箱明文（方便截图/投屏）">👁 隐私</button>
   <button class="btn ghost" id="btnTheme" title="切换外观主题（跟随系统 / 浅色 / 深色）">◐ 自动</button>
@@ -18,6 +19,7 @@
   <button class="btn ghost" id="btnSettings" title="设置">⚙ 设置<span class="nav-dot" id="settingsDot" hidden></span></button>
 </header>
 
+<div class="banner brk" id="breakBanner" hidden></div>
 <div class="banner" id="banner" hidden></div>
 <div class="banner info" id="waitBanner" hidden></div>
 <div class="banner info" id="updateBanner" hidden></div>
@@ -69,6 +71,33 @@
       <div><b>系统通知提醒</b><span>当前号剩余不足 15%、用尽的号恢复、订阅 3 天内到期或检测到新登录时提醒。</span></div></label>
     <label class="opt"><input type="checkbox" data-key="auto_check_update">
       <div><b>后台自动检查更新</b><span>定时检查 GitHub 仓库更新并推送系统通知，仅同步代码、不触碰账号凭证。</span></div></label>
+    <div class="brk-box">
+      <label class="opt"><input type="checkbox" data-key="break_enabled">
+        <div><b>☕ 放空提醒</b><span>按上下班与午休时间定时提醒起身放空，到点弹通知并记录每次放空时长。</span></div></label>
+      <div class="brk-grid" id="breakGrid">
+        <label>上班 <input type="time" data-skey="break_work_start"></label>
+        <label>下班 <input type="time" data-skey="break_work_end"></label>
+        <label>午休 <input type="time" data-skey="break_lunch_start"> – <input type="time" data-skey="break_lunch_end"></label>
+        <label>每次放空
+          <select data-skey="break_minutes">
+            <option value="5">5 分钟</option><option value="8">8 分钟</option><option value="10">10 分钟</option>
+            <option value="15">15 分钟</option><option value="20">20 分钟</option>
+          </select></label>
+        <label>上午每隔
+          <select data-skey="break_am_interval">
+            <option value="30">30 分钟</option><option value="45">45 分钟</option><option value="60">1 小时</option>
+            <option value="90">1.5 小时</option><option value="120">2 小时</option>
+          </select></label>
+        <label>下午每隔
+          <select data-skey="break_pm_interval">
+            <option value="20">20 分钟</option><option value="30">30 分钟</option><option value="45">45 分钟</option>
+            <option value="60">1 小时</option><option value="90">1.5 小时</option>
+          </select></label>
+        <label class="chk2"><input type="checkbox" data-key="break_workdays_only"> 仅工作日（周一至周五）</label>
+        <label class="chk2"><input type="checkbox" data-key="break_bring_front"> 到点自动弹出主窗口</label>
+      </div>
+      <div class="brk-today" id="breakToday"></div>
+    </div>
     <div class="update-box" id="updateBox">
       <div class="update-row">
         <div>
@@ -108,6 +137,6 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js?v=1.4.2"></script>
+<script src="app.js?v=1.5.0"></script>
 </body>
 </html>

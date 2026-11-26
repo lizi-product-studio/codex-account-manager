@@ -21,7 +21,40 @@ DEFAULTS = {
     "privacy_mode": False,                     # 隐私模式：对邮箱进行脱敏打码
     "theme": "auto",                           # 主题外观：auto | light | dark
     "tray_hint_shown": False,                  # 是否提示过“已缩到托盘”
+    # ---- 放空提醒 ----
+    "break_enabled": True,                     # 开启放空提醒
+    "break_workdays_only": True,               # 仅工作日（周一至周五）提醒
+    "break_bring_front": True,                 # 到点自动弹出主窗口
+    "break_work_start": "09:00",
+    "break_work_end": "18:00",
+    "break_lunch_start": "12:00",
+    "break_lunch_end": "13:00",
+    "break_am_interval": 60,                   # 上午每隔多少分钟提醒一次
+    "break_pm_interval": 30,                   # 下午每隔多少分钟提醒一次
+    "break_minutes": 10,                       # 每次放空建议上限（分钟）
 }
+
+INT_LIMITS = {"break_am_interval": (15, 240), "break_pm_interval": (15, 240), "break_minutes": (3, 30)}
+TIME_KEYS = ("break_work_start", "break_work_end", "break_lunch_start", "break_lunch_end")
+
+
+def _norm_time(v):
+    try:
+        h, m = str(v).strip().split(":")[:2]
+        h, m = int(h), int(m)
+    except (ValueError, AttributeError):
+        return None
+    if 0 <= h <= 23 and 0 <= m <= 59:
+        return "%02d:%02d" % (h, m)
+    return None
+
+
+def _norm_int(key, v):
+    lo, hi = INT_LIMITS[key]
+    try:
+        return max(lo, min(hi, int(float(v))))
+    except (TypeError, ValueError):
+        return None
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "CodexAccountManager"
@@ -38,6 +71,11 @@ def load():
     out["sort_mode"] = "remaining" if out.get("sort_mode") == "remaining" else "custom"
     out["theme"] = out.get("theme") if out.get("theme") in ("auto", "light", "dark") else "auto"
     out["privacy_mode"] = bool(out.get("privacy_mode", False))
+    for k in INT_LIMITS:
+        v = _norm_int(k, out.get(k))
+        out[k] = v if v is not None else DEFAULTS[k]
+    for k in TIME_KEYS:
+        out[k] = _norm_time(out.get(k)) or DEFAULTS[k]
     out["autostart"] = autostart_enabled()
     return out
 
@@ -54,6 +92,16 @@ def set_value(key, value):
         s[key] = "remaining" if str(value) == "remaining" else "custom"
     elif key == "theme":
         s[key] = str(value) if str(value) in ("auto", "light", "dark") else "auto"
+    elif key in INT_LIMITS:
+        v = _norm_int(key, value)
+        if v is None:
+            raise ValueError("请输入有效的分钟数")
+        s[key] = v
+    elif key in TIME_KEYS:
+        v = _norm_time(value)
+        if v is None:
+            raise ValueError("时间格式不正确，应为 HH:MM")
+        s[key] = v
     else:
         s[key] = bool(value)
         if key == "autostart":

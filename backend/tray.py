@@ -55,6 +55,7 @@ if IS_WIN:
             self._on_show = on_show
             self._on_switch = on_switch
             self._on_quit = on_quit
+            self.on_break = None
             self._state = None
             self._last_sig = None
             self.icon = pystray.Icon(
@@ -79,6 +80,13 @@ if IS_WIN:
                     enabled=a["valid"],
                 )
             yield pystray.Menu.SEPARATOR
+            br = (self._state or {}).get("breaks") or {}
+            if br.get("enabled") and self.on_break:
+                if br.get("active_start"):
+                    yield pystray.MenuItem("☕ 我回来了（结束放空）", lambda icon, item: self.on_break("end"))
+                else:
+                    yield pystray.MenuItem("☕ 现在去放空", lambda icon, item: self.on_break("start"))
+                yield pystray.Menu.SEPARATOR
             yield pystray.MenuItem("退出", lambda icon, item: self._on_quit())
 
         def _make_switch(self, acc_id, is_current):
@@ -100,7 +108,8 @@ if IS_WIN:
                 level = "none"   # 旧数据不着色，避免误导
             name = cur["name"] if cur else (state.get("current", {}).get("email") or "未登录")
             title = "Codex 账号管家\n当前：%s · %s" % (name, status_text(st))
-            sig = (remaining, level, title, tuple((a["id"], a["name"], a["is_current"], status_text(a.get("status")))
+            br = state.get("breaks") or {}
+            sig = (remaining, level, title, bool(br.get("enabled")), bool(br.get("active_start")), tuple((a["id"], a["name"], a["is_current"], status_text(a.get("status")))
                                                  for a in state.get("accounts", [])))
             if sig == self._last_sig:
                 return
@@ -134,6 +143,7 @@ else:
             self._on_show = on_show
             self._on_switch = on_switch
             self._on_quit = on_quit
+            self.on_break = None
 
         def update(self, state):
             pass

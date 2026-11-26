@@ -1,7 +1,7 @@
 """所有路径集中在这里。"""
 import os
 
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.5.0"
 
 HOME = os.path.expanduser("~")
 CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")
@@ -18,6 +18,7 @@ USAGE_CACHE = os.path.join(STORE_DIR, "usage_cache.json")
 LIVE_USAGE = os.path.join(STORE_DIR, "live_usage.json")
 SETTINGS_JSON = os.path.join(STORE_DIR, "settings.json")
 NOTIFIED_JSON = os.path.join(STORE_DIR, "notified.json")
+BREAKS_JSON = os.path.join(STORE_DIR, "breaks.json")
 
 OFFICIAL_USAGE_URL = "https://chatgpt.com/codex/settings/usage"
 

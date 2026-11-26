@@ -131,6 +131,23 @@ class Api:
             return r
         return _safe(run)()
 
+    def break_action(self, action, minutes=5):
+        def run():
+            b = self._svc.breaks
+            if action == "start":
+                b.start()
+            elif action == "end":
+                b.end()
+            elif action == "skip":
+                b.skip()
+            elif action == "snooze":
+                b.snooze(int(minutes or 5))
+            else:
+                raise StoreError("未知的放空操作")
+            threading.Thread(target=self._app.refresh_tray, daemon=True).start()
+            return {"ok": True, "breaks": b.status()}
+        return _safe(run)()
+
     def quit_app(self):
         threading.Thread(target=self._app.quit, daemon=True).start()
         return {"ok": True}
@@ -150,6 +167,7 @@ class App:
         self._stop = threading.Event()
         self.notifier = Notifier()
         self.tray = Tray(self.show, self.switch_from_tray, self.quit)
+        self.tray.on_break = self.break_from_tray
 
     # ---------------------------------------------------------------- 窗口
     def show(self):
@@ -203,6 +221,43 @@ class App:
     def restart(self):
         self.restart_after_exit = True
         self.quit()
+
+    # ---------------------------------------------------------------- 放空提醒
+    def refresh_tray(self):
+        try:
+            self.tray.update(self.svc.get_state())
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+    def _push_ui(self):
+        if not self.window:
+            return
+        try:
+            self.window.evaluate_js("window.onBreakEvent && window.onBreakEvent(); true")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def break_from_tray(self, action):
+        def run():
+            try:
+                if action == "start":
+                    self.svc.breaks.start()
+                    self.tray.notify("开始放空 ☕ 回来后记得点“我回来了”", "放空提醒")
+                else:
+                    m = self.svc.breaks.end()
+                    self.tray.notify("欢迎回来！本次放空 %d 分钟" % max(1, round(m)), "放空提醒")
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+            self.refresh_tray()
+            self._push_ui()
+        threading.Thread(target=run, daemon=True).start()
+
+    def on_break_event(self, kind, msg):
+        self.tray.notify(msg, "Codex 账号管家 · 放空提醒")
+        if kind == "due" and settings.load().get("break_bring_front", True):
+            self.show()
+        self.refresh_tray()
+        self._push_ui()
 
     def switch_from_tray(self, acc_id):
         def run():
@@ -380,6 +435,7 @@ def main():
     app.window = win
 
     app.tray.start()
+    app.svc.breaks.start_thread(app.on_break_event)
     threading.Thread(target=app.monitor, daemon=True).start()
     threading.Thread(target=app.listen_show, args=(show_handle,), daemon=True).start()
 
