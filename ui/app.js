@@ -15,15 +15,8 @@ let settings = {
   privacy_mode: false,
   theme: 'auto',
   break_enabled: true,
-  break_workdays_only: true,
-  break_bring_front: true,
-  break_work_start: '09:00',
-  break_work_end: '18:00',
-  break_lunch_start: '12:00',
-  break_lunch_end: '13:00',
-  break_am_interval: 60,
-  break_pm_interval: 30,
   break_minutes: 10,
+  break_goal: 8,
 };
 let busy = false;
 let sortMode = localStorage.getItem('sortMode') || 'custom';   // custom | remaining
@@ -609,7 +602,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.5.0';
+  const ver = state.version || u.app_version || '1.6.0';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -764,7 +757,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.5.0';
+  const ver = (state && state.version) || u.app_version || '1.6.0';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');
@@ -873,28 +866,41 @@ async function runUpdate(forceReset = false) {
   }
 }
 
-// ------------------------------------------------------------------ 放空提醒
+// ------------------------------------------------------------------ 放空小站
 let breakBusy = false;
-let breakRefreshing = false;
+let breakPanelSig = '';
 const fmtClock = (sec) => {
   sec = Math.max(0, Math.floor(sec));
-  return `${pad(Math.floor(sec / 60))}:${pad(sec % 60)}`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 };
-const fmtMins = (sec) => {
-  const m = Math.max(1, Math.ceil(sec / 60));
+const fmtDur = (sec) => {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return `${sec}秒`;
+  const m = Math.round(sec / 60);
   if (m < 60) return `${m}分钟`;
   return `${Math.floor(m / 60)}小时${m % 60 ? `${m % 60}分` : ''}`;
+};
+const fmtHM = (ts) => {
+  const d = new Date(ts * 1000);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 const breakRange = (b) => {
   const m = (b && b.target_minutes) || 10;
   return m > 5 ? `5–${m}` : `${m}`;
+};
+const tagLabel = (b, id) => {
+  const t = ((b && b.tags) || []).find((x) => x.id === id);
+  return t ? t.label : '';
 };
 
 function renderBreaks() {
   const b = state && state.breaks;
   const pill = $('breakPill');
   const bn = $('breakBanner');
-  if (!$('settings').hidden) renderBreakToday();
+  if (!$('breakPanel').hidden) renderBreakPanel();
   if (!b || !b.enabled) {
     pill.hidden = true;
     bn.hidden = true;
@@ -902,56 +908,31 @@ function renderBreaks() {
     return;
   }
   const now = nowSec();
-  const over = !!(b.active_start && now - b.active_start >= b.target_minutes * 60);
-
-  let cls = 'pill break-pill';
-  let html;
-  if (b.active_start) {
-    cls += over ? ' over' : ' active';
-    html = `☕ 放空中 <b data-brk-elapsed="${b.active_start}">${fmtClock(now - b.active_start)}</b>`;
-  } else if (b.due) {
-    cls += ' due';
-    html = '☕ 该放空啦';
-  } else if (!b.workday) {
-    html = '☕ 今天休息';
-  } else if (b.phase === 'before') {
-    html = `☕ ${b.work_start} 上班`;
-  } else if (b.phase === 'lunch') {
-    html = `☕ 午休中 · ${b.lunch_end} 回来`;
-  } else if (b.phase === 'after') {
-    html = `☕ 已下班 · 今日放空 ${b.count} 次`;
-  } else if (b.snooze_until) {
-    html = `☕ <b data-brk-cd="${b.snooze_until}">${fmtMins(b.snooze_until - now)}</b>后再提醒`;
-  } else if (b.next) {
-    html = `☕ ${b.next.hm} 放空 · <b data-brk-cd="${b.next.ts}">${fmtMins(b.next.ts - now)}</b>后`;
+  const act = b.active;
+  const over = !!(act && now - act.start >= b.target_minutes * 60);
+  if (act) {
+    pill.className = 'pill break-pill ' + (over ? 'over' : 'active');
+    pill.innerHTML = `☕ 放空中 <b data-brk-elapsed="${act.start}">${fmtClock(now - act.start)}</b> · 点我已回来`;
+    pill.title = '回来了就点一下，记录这次放空';
   } else {
-    html = '☕ 今日放空提醒已结束';
+    pill.className = 'pill break-pill';
+    pill.innerHTML = `☕ 去放空 · 今日 ${b.today.count} 次`;
+    pill.title = `今日放空 ${b.today.count} 次，共 ${fmtDur(b.today.total_sec)}\n点击打开放空小站`;
   }
-  pill.className = cls;
-  pill.innerHTML = html;
   pill.hidden = false;
-  pill.title = `今日已放空 ${b.count} 次 · 共 ${b.minutes_total} 分钟（计划 ${b.total} 次）\n`
-    + (b.active_start ? '点击结束放空' : b.due ? '点击开始放空' : '点击查看 / 提前去放空');
 
-  const sig = JSON.stringify([b.active_start, over, b.due && b.due.ts, b.count]);
+  const sig = JSON.stringify([act && act.start, act && act.tag, over]);
   if (bn.dataset.sig === sig) return;
   bn.dataset.sig = sig;
-  if (b.active_start) {
-    const el = `<b data-brk-elapsed="${b.active_start}">${fmtClock(now - b.active_start)}</b>`;
+  if (act) {
+    const tg = tagLabel(b, act.tag);
+    const el = `<b data-brk-elapsed="${act.start}">${fmtClock(now - act.start)}</b>`;
     bn.className = 'banner brk ' + (over ? 'over' : 'active');
-    bn.innerHTML = over
-      ? `<span>☕ 已经放空 ${el} 啦，超过 ${b.target_minutes} 分钟了，该回来继续干活～</span>
-         <span class="spacer"></span><button class="btn primary sm" data-brk="end">我回来了</button>`
-      : `<span>☕ 正在放空 ${el} · 建议 ${breakRange(b)} 分钟，起来走走、看看远处、喝口水</span>
-         <span class="spacer"></span><button class="btn sm" data-brk="end">我回来了</button>`;
-    bn.hidden = false;
-  } else if (b.due) {
-    bn.className = 'banner brk due';
-    bn.innerHTML = `<span>☕ <b>${b.due.hm}</b> 到点放空啦 · 起身活动 ${breakRange(b)} 分钟（今日第 ${b.count + 1} 次）</span>
+    bn.innerHTML = `<span>☕ ${over ? `已经放空 ${el} 啦，超过 ${b.target_minutes} 分钟了` : `正在放空 ${el}`}${tg ? ` · ${esc(tg)}` : ''}${over ? '' : ` · 建议 ${breakRange(b)} 分钟`}</span>
       <span class="spacer"></span>
-      <button class="btn primary sm" data-brk="start">开始放空</button>
-      <button class="btn sm" data-brk="snooze">5 分钟后</button>
-      <button class="btn sm" data-brk="skip">跳过</button>`;
+      <button class="btn primary sm" data-brk="end">✅ 已回来</button>
+      <button class="btn sm" data-brk="open">放空小站</button>
+      <button class="btn sm" data-brk="cancel">不算这次</button>`;
     bn.hidden = false;
   } else {
     bn.hidden = true;
@@ -961,53 +942,121 @@ function renderBreaks() {
 
 function tickBreaks() {
   const b = state && state.breaks;
-  if (!b || !b.enabled) return;
+  if (!b) return;
   const now = nowSec();
   document.querySelectorAll('[data-brk-elapsed]').forEach((el) => {
     el.textContent = fmtClock(now - Number(el.dataset.brkElapsed));
   });
-  let reached = false;
-  document.querySelectorAll('[data-brk-cd]').forEach((el) => {
-    const left = Number(el.dataset.brkCd) - now;
-    if (left <= 0) reached = true;
-    else el.textContent = fmtMins(left);
+  document.querySelectorAll('[data-brk-since]').forEach((el) => {
+    el.textContent = fmtDur(now - Number(el.dataset.brkSince));
   });
-  if (b.active_start && !$('breakBanner').classList.contains('over') && now - b.active_start >= b.target_minutes * 60) {
+  if (b.enabled && b.active && !$('breakBanner').classList.contains('over') && now - b.active.start >= b.target_minutes * 60) {
     renderBreaks();
   }
-  if (reached && !breakRefreshing) {
-    breakRefreshing = true;
-    refresh(true).finally(() => setTimeout(() => { breakRefreshing = false; }, 3000));
-  }
 }
 
-function renderBreakToday() {
+function renderBreakPanel(force = false) {
   const b = state && state.breaks;
-  const el = $('breakToday');
-  $('breakGrid').classList.toggle('dim', !(b && b.enabled));
-  if (!b || !b.enabled) { el.innerHTML = '<span class="muted small">放空提醒已关闭</span>'; return; }
-  if (!b.slots.length) {
-    el.innerHTML = `<span class="muted small">${b.workday ? '当前设置下今天没有提醒点' : '今天休息，不提醒'}</span>`;
-    return;
-  }
-  const names = { done: '已放空', skipped: '已跳过', missed: '错过了', due: '待放空', snoozed: '稍后提醒', pending: '未到' };
-  el.innerHTML = `<div class="brk-sum">今日进度 <b>${b.done}/${b.total}</b> · 已放空 ${b.count} 次，共 ${b.minutes_total} 分钟</div>
-    <div class="brk-dots">${b.slots.map((s) => `<span class="d ${s.state}" title="${s.hm} · ${names[s.state] || ''}">${s.hm}</span>`).join('')}</div>`;
+  const box = $('breakPanelBody');
+  if (!b) { box.innerHTML = '<div class="muted">正在读取…</div>'; return; }
+  const sig = JSON.stringify(b);
+  if (!force && sig === breakPanelSig) return;
+  breakPanelSig = sig;
+  const now = nowSec();
+  const t = b.today;
+  const act = b.active;
+  const lv = b.level;
+  const nextLv = lv.next_at ? ` · 再放空 ${lv.next_at - b.all.count} 次升级` : '';
+  $('bpLevel').innerHTML = `<b>Lv.${lv.lv} ${esc(lv.title)}</b> · 累计 ${b.all.count} 次 / ${fmtDur(b.all.total_sec)}${nextLv}`
+    + (b.streak ? ` · 🔥 连续 ${b.streak} 天` : '');
+
+  const chips = (b.tags || []).map((x) => `<button class="chip" data-bp="start" data-tag="${esc(x.id)}">${esc(x.label)}</button>`).join('');
+  const hero = act
+    ? `<div class="bp-hero on">
+        <div class="bp-hero-l">
+          <div class="bp-cap">正在放空${act.tag ? ' · ' + esc(tagLabel(b, act.tag)) : ''}</div>
+          <div class="bp-timer" data-brk-elapsed="${act.start}">${fmtClock(now - act.start)}</div>
+          <div class="bp-sub">${fmtHM(act.start)} 出发 · 建议 ${breakRange(b)} 分钟</div>
+        </div>
+        <div class="bp-hero-r">
+          <button class="btn primary bp-big" data-bp="end">✅ 已回来</button>
+          <button class="btn sm ghost" data-bp="cancel">不算这次</button>
+        </div>
+      </div>`
+    : `<div class="bp-hero">
+        <div class="bp-hero-l">
+          <div class="bp-cap">${b.since_last ? '距离上次放空' : '今天还没放空过'}</div>
+          <div class="bp-timer">${b.since_last ? `<span data-brk-since="${b.since_last}">${fmtDur(now - b.since_last)}</span>` : '☕'}</div>
+          <div class="bp-sub">想走就走，回来点「已回来」就会记下这次放空</div>
+        </div>
+        <div class="bp-hero-r"><button class="btn primary bp-big" data-bp="start">☕ 去放空</button></div>
+      </div>
+      <div class="bp-chips"><span class="muted small">或者选个理由出发：</span>${chips}</div>`;
+
+  const goalPct = Math.min(100, Math.round((t.count / Math.max(1, b.goal)) * 100));
+  const stats = `<div class="bp-stats">
+      <div class="bp-stat"><div class="k">今日次数</div><div class="v">${t.count}<small> / 目标 ${b.goal}</small></div>
+        <div class="bar"><div class="fill ${t.count >= b.goal ? '' : 'amber'}" style="width:${goalPct}%"></div></div></div>
+      <div class="bp-stat"><div class="k">今日总时长</div><div class="v">${t.count ? fmtDur(t.total_sec) : '—'}</div></div>
+      <div class="bp-stat"><div class="k">平均每次</div><div class="v">${t.count ? fmtDur(t.avg_sec) : '—'}</div></div>
+      <div class="bp-stat"><div class="k">最长一次</div><div class="v">${t.count ? fmtDur(t.longest_sec) : '—'}</div></div>
+    </div>`;
+
+  const recs = t.records.length
+    ? t.records.map((r) => `<div class="bp-rec">
+        <span class="tm">${fmtHM(r.start)} – ${fmtHM(r.end)}</span>
+        <span class="du">${fmtDur(r.end - r.start)}</span>
+        <span class="tg">${esc(tagLabel(b, r.tag) || '—')}</span>
+        ${r.auto ? '<span class="tag warn">自动结束</span>' : ''}
+        <button class="bp-del" data-bp="delete" data-start="${r.start}" title="删除这条记录">×</button>
+      </div>`).join('')
+    : '<div class="muted small bp-empty">今天还没有放空记录，点上面的「去放空」开始吧</div>';
+
+  const maxMin = Math.max(10, ...b.week.map((d) => d.total_sec / 60));
+  const week = b.week.map((d) => `<div class="bp-col ${d.today ? 'today' : ''}" title="${d.date} · ${d.count} 次 · ${fmtDur(d.total_sec)}">
+      <div class="n">${d.count || ''}</div>
+      <div class="bp-barv"><div style="height:${Math.round((d.total_sec / 60 / maxMin) * 100)}%"></div></div>
+      <div class="l">${d.label}</div>
+    </div>`).join('');
+  const got = b.badges.filter((x) => x.got).length;
+  const badges = b.badges.map((x) => `<div class="bp-badge ${x.got ? 'got' : ''}" title="${esc(x.desc)}${x.got ? '（已解锁）' : '（未解锁）'}"><span class="i">${x.icon}</span><span>${esc(x.name)}</span></div>`).join('');
+
+  box.innerHTML = hero + stats
+    + `<div class="bp-sec"><div class="bp-h">今日记录 <span class="muted small">${t.count} 次</span></div><div class="bp-recs">${recs}</div></div>
+      <div class="bp-cols2">
+        <div class="bp-sec"><div class="bp-h">最近 7 天 <span class="muted small">柱高 = 放空时长，数字 = 次数</span></div><div class="bp-week">${week}</div></div>
+        <div class="bp-sec"><div class="bp-h">成就 <span class="muted small">${got}/${b.badges.length}</span></div><div class="bp-badges">${badges}</div></div>
+      </div>`;
+  $('bpMinutes').value = String(b.target_minutes);
+  $('bpGoal').value = String(b.goal);
 }
 
-async function breakAction(action, minutes = 5) {
+function openBreakPanel() {
+  renderBreakPanel(true);
+  $('breakPanel').hidden = false;
+}
+function closeBreakPanel() {
+  $('breakPanel').hidden = true;
+}
+
+async function breakAction(action, arg = null) {
   if (breakBusy) return;
+  if (action === 'delete' && !(await confirmBox('删除记录', '确定删除这条放空记录吗？', '删除', 'danger solid'))) return;
   breakBusy = true;
-  const prev = state && state.breaks;
+  const prev = state && state.breaks && state.breaks.active;
   try {
-    const r = await call('break_action', action, minutes);
+    const r = await call('break_action', action, arg);
     if (state && r.breaks) state.breaks = r.breaks;
-    if (action === 'start') toast(`开始放空 ☕ 建议 ${breakRange(r.breaks)} 分钟，回来记得点“我回来了”`);
+    if (action === 'start') toast('出发放空 ☕ 回来记得点「已回来」');
     else if (action === 'end') {
-      const m = prev && prev.active_start ? Math.max(1, Math.round((nowSec() - prev.active_start) / 60)) : 0;
-      toast(m ? `欢迎回来！本次放空 ${m} 分钟` : '欢迎回来！');
-    } else if (action === 'snooze') toast(`好的，${minutes} 分钟后再提醒你`);
-    else if (action === 'skip') toast('已跳过这次放空');
+      const dur = prev ? Math.max(0, Math.round(nowSec() - prev.start)) : 0;
+      if (prev && dur < 20) toast(`这次放空 ${fmtDur(dur)}（不足 20 秒，未计入记录）`);
+      else toast(prev ? `欢迎回来！这次放空 ${fmtDur(dur)}，今天第 ${r.breaks.today.count} 次` : '欢迎回来！');
+    } else if (action === 'cancel') toast('好的，这次不计入记录');
+    else if (action === 'delete') toast('已删除这条记录');
+    if (r.new_badges && r.new_badges.length) {
+      setTimeout(() => toast(`🏅 解锁成就：${r.new_badges.join('、')}`), 2200);
+    }
     renderBreaks();
   } catch (e) {
     toast(e.message, true);
@@ -1016,23 +1065,11 @@ async function breakAction(action, minutes = 5) {
   }
 }
 
-async function onBreakPill() {
+function onBreakPill() {
   const b = state && state.breaks;
   if (!b) return;
-  if (b.active_start) { breakAction('end'); return; }
-  if (b.due) { breakAction('start'); return; }
-  const nextTxt = b.next ? `下次提醒：${b.next.hm}` : (b.workday ? '今天的提醒点已经全部结束啦。' : '今天不是工作日，不提醒。');
-  const r = await dialog({
-    title: '☕ 放空提醒',
-    body: `今日已放空 ${b.count} 次，共 ${b.minutes_total} 分钟（计划 ${b.total} 次）。\n${nextTxt}`,
-    buttons: [
-      { id: 'set', text: '提醒设置' },
-      { id: 'cancel', text: '关闭' },
-      { id: 'go', text: '现在去放空', kind: 'primary' },
-    ],
-  });
-  if (r.id === 'go') breakAction('start');
-  else if (r.id === 'set') openSettings();
+  if (b.active) breakAction('end');
+  else openBreakPanel();
 }
 
 // ------------------------------------------------------------------ 设置
@@ -1042,7 +1079,6 @@ function openSettings() {
     const v = settings[el.dataset.skey];
     if (v !== undefined && v !== null) el.value = String(v);
   });
-  renderBreakToday();
   $('storeDir').textContent = (state && state.store_dir) || '';
   const isMac = state && state.platform === 'darwin';
   $('optCloseToTray').hidden = isMac;
@@ -1102,9 +1138,28 @@ async function init() {
   $('breakPill').onclick = onBreakPill;
   $('breakBanner').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-brk]');
-    if (btn) breakAction(btn.dataset.brk);
+    if (!btn) return;
+    if (btn.dataset.brk === 'open') openBreakPanel();
+    else breakAction(btn.dataset.brk);
   });
   window.onBreakEvent = () => refresh(true);
+  $('bpClose').onclick = closeBreakPanel;
+  $('breakPanel').addEventListener('click', (e) => {
+    if (e.target === $('breakPanel')) { closeBreakPanel(); return; }
+    const btn = e.target.closest('[data-bp]');
+    if (!btn) return;
+    const act = btn.dataset.bp;
+    if (act === 'start') breakAction('start', btn.dataset.tag || '');
+    else if (act === 'delete') breakAction('delete', Number(btn.dataset.start));
+    else breakAction(act);
+  });
+  [['bpMinutes', 'break_minutes'], ['bpGoal', 'break_goal']].forEach(([id, key]) => {
+    $(id).onchange = async (e) => {
+      await setSetting(key, Number(e.target.value));
+      await refresh(true);
+      renderBreakPanel(true);
+    };
+  });
   $('btnSave').onclick = saveCurrent;
   $('btnAdd').onclick = addNew;
   $('chkLaunch').onchange = (e) => setSetting('launch_after_switch', e.target.checked);
@@ -1170,6 +1225,10 @@ async function init() {
     if (!$('modal').hidden || busy) return;
     if (e.key === 'Escape' && document.querySelector('.card-menu-wrap.open')) {
       e.preventDefault(); closeMenus(); return;
+    }
+    if (!$('breakPanel').hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); closeBreakPanel(); }
+      return;
     }
     if (!$('settings').hidden) {
       if (e.key === 'Escape') { e.preventDefault(); closeSettings(); }

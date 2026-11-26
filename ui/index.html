@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Codex 账号管家</title>
-<link rel="stylesheet" href="style.css?v=1.5.0">
+<link rel="stylesheet" href="style.css?v=1.6.0">
 </head>
 <body>
 <header class="topbar">
@@ -45,6 +45,33 @@
   <span class="muted small" id="footInfo"></span>
 </footer>
 
+<!-- 放空小站 -->
+<div class="mask" id="breakPanel" hidden>
+  <div class="dialog wide bp">
+    <div class="bp-head">
+      <div class="dialog-title">☕ 放空小站</div>
+      <span class="bp-level" id="bpLevel"></span>
+      <span class="spacer"></span>
+      <button class="btn ghost sm" id="bpClose">关闭</button>
+    </div>
+    <div id="breakPanelBody"></div>
+    <div class="bp-foot">
+      <label>单次建议
+        <select id="bpMinutes">
+          <option value="5">5 分钟</option><option value="8">8 分钟</option><option value="10">10 分钟</option>
+          <option value="15">15 分钟</option><option value="20">20 分钟</option><option value="30">30 分钟</option>
+        </select></label>
+      <label>每日目标
+        <select id="bpGoal">
+          <option value="4">4 次</option><option value="6">6 次</option><option value="8">8 次</option>
+          <option value="10">10 次</option><option value="12">12 次</option><option value="15">15 次</option>
+        </select></label>
+      <span class="spacer"></span>
+      <span>放空超过建议时长会提醒你回来</span>
+    </div>
+  </div>
+</div>
+
 <!-- 通用弹窗 -->
 <div class="mask" id="modal" hidden>
   <div class="dialog">
@@ -73,30 +100,7 @@
       <div><b>后台自动检查更新</b><span>定时检查 GitHub 仓库更新并推送系统通知，仅同步代码、不触碰账号凭证。</span></div></label>
     <div class="brk-box">
       <label class="opt"><input type="checkbox" data-key="break_enabled">
-        <div><b>☕ 放空提醒</b><span>按上下班与午休时间定时提醒起身放空，到点弹通知并记录每次放空时长。</span></div></label>
-      <div class="brk-grid" id="breakGrid">
-        <label>上班 <input type="time" data-skey="break_work_start"></label>
-        <label>下班 <input type="time" data-skey="break_work_end"></label>
-        <label>午休 <input type="time" data-skey="break_lunch_start"> – <input type="time" data-skey="break_lunch_end"></label>
-        <label>每次放空
-          <select data-skey="break_minutes">
-            <option value="5">5 分钟</option><option value="8">8 分钟</option><option value="10">10 分钟</option>
-            <option value="15">15 分钟</option><option value="20">20 分钟</option>
-          </select></label>
-        <label>上午每隔
-          <select data-skey="break_am_interval">
-            <option value="30">30 分钟</option><option value="45">45 分钟</option><option value="60">1 小时</option>
-            <option value="90">1.5 小时</option><option value="120">2 小时</option>
-          </select></label>
-        <label>下午每隔
-          <select data-skey="break_pm_interval">
-            <option value="20">20 分钟</option><option value="30">30 分钟</option><option value="45">45 分钟</option>
-            <option value="60">1 小时</option><option value="90">1.5 小时</option>
-          </select></label>
-        <label class="chk2"><input type="checkbox" data-key="break_workdays_only"> 仅工作日（周一至周五）</label>
-        <label class="chk2"><input type="checkbox" data-key="break_bring_front"> 到点自动弹出主窗口</label>
-      </div>
-      <div class="brk-today" id="breakToday"></div>
+        <div><b>☕ 放空小站</b><span>顶栏显示「去放空」：想走就走，回来点「已回来」，自动统计每次时长、今日次数与总时长，还有最近 7 天、连续天数、等级和成就。</span></div></label>
     </div>
     <div class="update-box" id="updateBox">
       <div class="update-row">
@@ -137,6 +141,6 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js?v=1.5.0"></script>
+<script src="app.js?v=1.6.0"></script>
 </body>
 </html>

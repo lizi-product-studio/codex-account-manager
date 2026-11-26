@@ -1,7 +1,7 @@
-"""放空提醒：按上下班 / 午休时间表定时提醒起身放空，并记录每次放空时长。
+"""放空小站：想走就走的放空计时器。
 
-默认：早 9 晚 6、12:00-13:00 午休；上午每 60 分钟提醒一次，下午每 30 分钟提醒一次，每次放空 5-10 分钟。
-状态持久化在 ~/.codex-accounts/breaks.json，重启程序不丢当天记录。
+点「去放空」开始计时，回来点「已回来」结束并记录；自动统计每次时长、每日次数、总时长，
+附带最近 7 天柱状图、连续天数、放空等级与成就。数据保存在 ~/.codex-accounts/breaks.json。
 """
 import datetime
 import threading
@@ -11,97 +11,47 @@ import traceback
 from . import paths, settings
 from .util import atomic_write_json, load_json
 
-GRACE_SECONDS = 30 * 60        # 到点后最长保持“待放空”多久，超过算错过
-EARLY_MERGE_SECONDS = 15 * 60  # 提前去放空：下一个提醒点在 15 分钟内则一并算完成
-AUTO_END_MINUTES = 60          # 放空超过 60 分钟视为忘了点“我回来了”，自动结束
-INFO_WINDOW = 10 * 60          # 午休 / 下班提醒只在到点后 10 分钟内发送（避免晚上打开程序时乱发）
+KEEP_DAYS = 365
+AUTO_END_SECONDS = 3 * 3600   # 放空超过 3 小时视为忘了点「已回来」，自动结束
+MIN_RECORD_SECONDS = 20       # 少于 20 秒视为误点，不记录
+
+TAGS = [
+    ("water", "☕ 喝水"), ("walk", "🚶 走走"), ("wc", "🚻 厕所"), ("air", "🌿 透气"),
+    ("daze", "💭 发呆"), ("phone", "📱 刷手机"), ("chat", "💬 聊天"), ("snack", "🍪 零食"),
+]
+TAG_IDS = {t[0] for t in TAGS}
+LEVELS = [(0, "放空新手"), (5, "放空学徒"), (20, "摸鱼达人"), (50, "放空高手"),
+          (100, "放空大师"), (200, "禅定宗师"), (500, "放空之神")]
+WEEKDAYS = "一二三四五六日"
+ONE_DAY = datetime.timedelta(days=1)
 
 
-def _hm(s):
-    try:
-        h, m = str(s).strip().split(":")[:2]
-        h, m = int(h), int(m)
-    except (ValueError, AttributeError):
-        return None
-    if 0 <= h <= 23 and 0 <= m <= 59:
-        return h * 60 + m
-    return None
+def _day(ts):
+    return datetime.date.fromtimestamp(ts)
 
 
-def _fmt(minutes):
-    return "%02d:%02d" % divmod(int(minutes), 60)
-
-
-def config(s=None):
-    s = s or settings.load()
-    d = settings.DEFAULTS
-
-    def t(k):
-        v = _hm(s.get(k))
-        return v if v is not None else _hm(d[k])
-
+def _cfg():
+    s = settings.load()
     return dict(
         enabled=bool(s.get("break_enabled", True)),
-        workdays_only=bool(s.get("break_workdays_only", True)),
-        bring_front=bool(s.get("break_bring_front", True)),
-        start=t("break_work_start"), end=t("break_work_end"),
-        lunch_start=t("break_lunch_start"), lunch_end=t("break_lunch_end"),
-        am=max(15, int(s.get("break_am_interval") or 60)),
-        pm=max(15, int(s.get("break_pm_interval") or 30)),
-        minutes=max(3, int(s.get("break_minutes") or 10)),
+        minutes=int(s.get("break_minutes") or 10),
+        goal=int(s.get("break_goal") or 8),
     )
 
 
-def _bounds(cfg):
-    st, ls, le, en = cfg["start"], cfg["lunch_start"], cfg["lunch_end"], cfg["end"]
-    lunch = st < ls < le < en
-    if not lunch:
-        ls = le = en
-    return st, ls, le, en, lunch
-
-
-def _day_ts(day, minutes):
-    return (datetime.datetime.combine(day, datetime.time(0, 0)) + datetime.timedelta(minutes=minutes)).timestamp()
-
-
-def is_workday(day, cfg):
-    return not (cfg["workdays_only"] and day.weekday() >= 5)
-
-
-def slots_for(day, cfg):
-    """某天的全部提醒点：上午从上班起每 am 分钟一次（午休前），下午从午休结束起每 pm 分钟一次（下班前）。"""
-    if not is_workday(day, cfg):
-        return []
-    st, ls, le, en, lunch = _bounds(cfg)
-    if st >= en:
-        return []
-    out = []
-    t = st + cfg["am"]
-    while t < ls:
-        out.append(t)
-        t += cfg["am"]
-    if lunch:
-        t = le + cfg["pm"]
-        while t < en:
-            out.append(t)
-            t += cfg["pm"]
-    return [dict(ts=_day_ts(day, m), hm=_fmt(m)) for m in out]
-
-
-def _phase(day, now, cfg):
-    st, ls, le, en, lunch = _bounds(cfg)
-    nm = (now - _day_ts(day, 0)) / 60.0
-    if nm < st:
-        return "before"
-    if nm >= en:
-        return "after"
-    if lunch and ls <= nm < le:
-        return "lunch"
-    return "work"
-
-
-def _range_text(minutes):
-    return "5–%d" % minutes if minutes > 5 else "%d" % minutes
+def _streaks(days, today):
+    """返回 (当前连续天数, 历史最长连续天数)。今天还没放空时，从昨天往前数。"""
+    cur = 0
+    d = today if today in days else today - ONE_DAY
+    while d in days:
+        cur += 1
+        d -= ONE_DAY
+    best, run, prev = 0, 0, None
+    for d in sorted(days):
+        run = run + 1 if (prev is not None and d - prev == ONE_DAY) else 1
+        best = max(best, run)
+        prev = d
+    return cur, best
 
 
 class BreakTimer:
@@ -110,169 +60,150 @@ class BreakTimer:
         self._stop = threading.Event()
         self._on_event = None
         raw = load_json(paths.BREAKS_JSON, {})
-        self._st = raw if isinstance(raw, dict) else {}
-        with self._lock:
-            self._ensure_day(time.time())
+        self._st = self._migrate(raw if isinstance(raw, dict) else {})
 
-    # ---------------------------------------------------------------- 持久化 / 跨天
+    # ---------------------------------------------------------------- 持久化
+    @staticmethod
+    def _valid(r):
+        return isinstance(r, dict) and isinstance(r.get("start"), (int, float)) \
+            and isinstance(r.get("end"), (int, float)) and r["end"] > r["start"]
+
+    @classmethod
+    def _migrate(cls, raw):
+        if raw.get("v") == 2:
+            recs = [r for r in raw.get("records") or [] if cls._valid(r)]
+            act = raw.get("active") if isinstance(raw.get("active"), dict) else None
+            return dict(v=2, records=recs, active=act, over_notified=bool(raw.get("over_notified")))
+        # v1（定点提醒版）→ v2：保留已有放空记录
+        recs = [dict(start=e["start"], end=e["end"], tag="") for e in raw.get("log") or [] if cls._valid(e)]
+        act = raw.get("active")
+        act = dict(start=float(act), tag="") if isinstance(act, (int, float)) else None
+        return dict(v=2, records=recs, active=act, over_notified=False)
+
     def _save(self):
+        cutoff = time.time() - KEEP_DAYS * 86400
+        self._st["records"] = [r for r in self._st["records"] if r["start"] >= cutoff]
         try:
             atomic_write_json(paths.BREAKS_JSON, self._st)
         except OSError:
             pass
 
-    def _ensure_day(self, now):
-        today = datetime.date.fromtimestamp(now).isoformat()
-        if self._st.get("date") == today:
-            return
-        hist = self._st.get("history") if isinstance(self._st.get("history"), dict) else {}
-        if self._st.get("date"):
-            log = self._st.get("log") or []
-            hist[self._st["date"]] = dict(
-                count=len(log), minutes=round(sum(e["end"] - e["start"] for e in log) / 60))
-        hist = {k: hist[k] for k in sorted(hist)[-30:]}
-        self._st = dict(date=today, handled={}, notified={}, log=[], snooze_until=None,
-                        active=None, over_notified=False, history=hist)
-        self._save()
-
-    # ---------------------------------------------------------------- 计算
-    @staticmethod
-    def _key(ts):
-        return str(int(ts))
-
-    def _deadline(self, i, slots):
-        dl = slots[i]["ts"] + GRACE_SECONDS
-        if i + 1 < len(slots):
-            dl = min(dl, slots[i + 1]["ts"])
-        sn = self._st.get("snooze_until")
-        if sn and sn >= slots[i]["ts"]:
-            dl = max(dl, sn + 120)
-        return dl
-
-    def _candidate(self, now, slots):
-        """最近一个已到点、还没处理、也还没过期的提醒点下标（忽略稍后提醒）。"""
-        idx = None
-        for i, s in enumerate(slots):
-            if s["ts"] <= now:
-                idx = i
-            else:
-                break
-        if idx is None:
-            return None
-        if self._key(slots[idx]["ts"]) in (self._st.get("handled") or {}):
-            return None
-        if now >= self._deadline(idx, slots):
-            return None
-        return idx
-
-    def _context(self, now):
-        cfg = config()
-        day = datetime.date.fromtimestamp(now)
-        workday = is_workday(day, cfg)
-        slots = slots_for(day, cfg) if cfg["enabled"] else []
-        return cfg, day, workday, slots
-
-    def _log_stats(self):
-        log = self._st.get("log") or []
-        return len(log), round(sum(e["end"] - e["start"] for e in log) / 60)
-
+    # ---------------------------------------------------------------- 统计
     def status(self):
         with self._lock:
             now = time.time()
-            self._ensure_day(now)
-            cfg, day, workday, slots = self._context(now)
-            handled = self._st.get("handled") or {}
-            active = self._st.get("active")
-            sn = self._st.get("snooze_until")
-            cand = self._candidate(now, slots)
-            snoozed = bool(cand is not None and sn and now < sn)
-            due = slots[cand] if (cand is not None and not active and not snoozed) else None
-            items = []
-            for i, s in enumerate(slots):
-                k = self._key(s["ts"])
-                if k in handled:
-                    state = handled[k]
-                elif i == cand:
-                    state = "snoozed" if snoozed else ("due" if not active else "pending")
-                elif s["ts"] > now:
-                    state = "pending"
-                else:
-                    state = "missed"
-                items.append(dict(ts=s["ts"], hm=s["hm"], state=state))
-            nxt = next((s for s in slots if s["ts"] > now and self._key(s["ts"]) not in handled), None)
-            count, mins = self._log_stats()
-            st, ls, le, en, _ = _bounds(cfg)
+            cfg = _cfg()
+            today = _day(now)
+            recs = sorted(self._st["records"], key=lambda r: r["start"])
+            by_day = {}
+            for r in recs:
+                e = by_day.setdefault(_day(r["start"]), [0, 0.0])
+                e[0] += 1
+                e[1] += r["end"] - r["start"]
+
+            t_recs = [r for r in recs if _day(r["start"]) == today]
+            durs = [r["end"] - r["start"] for r in t_recs]
+            tag_counts = {}
+            for r in t_recs:
+                if r.get("tag"):
+                    tag_counts[r["tag"]] = tag_counts.get(r["tag"], 0) + 1
+
+            week = []
+            for i in range(6, -1, -1):
+                d = today - datetime.timedelta(days=i)
+                c, sec = by_day.get(d, (0, 0.0))
+                week.append(dict(date=d.isoformat(), label="今天" if i == 0 else "周" + WEEKDAYS[d.weekday()],
+                                 count=c, total_sec=round(sec), today=(i == 0)))
+
+            streak, best_streak = _streaks(set(by_day), today)
+            total_cnt = len(recs)
+            total_sec = sum(r["end"] - r["start"] for r in recs)
+            idx = max(i for i, (th, _) in enumerate(LEVELS) if total_cnt >= th)
+            level = dict(lv=idx + 1, title=LEVELS[idx][1],
+                         next_at=LEVELS[idx + 1][0] if idx + 1 < len(LEVELS) else None)
+
+            act = self._st.get("active")
             return dict(
-                enabled=cfg["enabled"], workday=workday,
-                phase=_phase(day, now, cfg) if workday else "rest",
-                target_minutes=cfg["minutes"],
-                work_start=_fmt(st), work_end=_fmt(en), lunch_start=_fmt(ls), lunch_end=_fmt(le),
-                active_start=active,
-                due=dict(ts=due["ts"], hm=due["hm"]) if due else None,
-                next=dict(ts=nxt["ts"], hm=nxt["hm"]) if nxt else None,
-                snooze_until=sn if (sn and now < sn) else None,
-                count=count, minutes_total=mins,
-                done=sum(1 for v in handled.values() if v == "done"), total=len(slots),
-                slots=items,
+                enabled=cfg["enabled"], target_minutes=cfg["minutes"], goal=cfg["goal"],
+                active=dict(start=act["start"], tag=act.get("tag") or "") if act else None,
+                today=dict(
+                    count=len(t_recs), total_sec=round(sum(durs)),
+                    avg_sec=round(sum(durs) / len(durs)) if durs else 0,
+                    longest_sec=round(max(durs)) if durs else 0,
+                    records=[dict(start=r["start"], end=r["end"], tag=r.get("tag") or "", auto=bool(r.get("auto")))
+                             for r in reversed(t_recs)],
+                    tags=tag_counts,
+                ),
+                since_last=t_recs[-1]["end"] if t_recs else None,
+                week=week, streak=streak, best_streak=best_streak,
+                all=dict(count=total_cnt, total_sec=round(total_sec), days=len(by_day)),
+                level=level,
+                badges=self._badges(recs, by_day, cfg, best_streak, total_cnt),
+                tags=[dict(id=i, label=l) for i, l in TAGS],
             )
 
+    @staticmethod
+    def _badges(recs, by_day, cfg, best_streak, total_cnt):
+        durs = [r["end"] - r["start"] for r in recs]
+        tags = {r.get("tag") for r in recs if r.get("tag")}
+        hours = [datetime.datetime.fromtimestamp(r["start"]).hour for r in recs]
+        day_counts = [c for c, _ in by_day.values()]
+        items = [
+            ("first", "🌱", "初次放空", "完成第一次放空", total_cnt >= 1),
+            ("goal", "🎯", "今日达标", "单日放空次数达到每日目标", any(c >= cfg["goal"] for c in day_counts)),
+            ("flash", "⚡", "闪电充电", "单次放空不超过 3 分钟", any(d <= 180 for d in durs)),
+            ("deep", "🧘", "深度放空", "单次放空超过 15 分钟", any(d >= 900 for d in durs)),
+            ("early", "🌅", "早安放空", "上午 10 点前去放空一次", any(5 <= h < 10 for h in hours)),
+            ("rainbow", "🌈", "花样放空", "用过 5 种不同的放空理由", len(tags) >= 5),
+            ("streak3", "🔥", "三天不断", "连续 3 天都有放空", best_streak >= 3),
+            ("streak7", "🏆", "一周坚持", "连续 7 天都有放空", best_streak >= 7),
+            ("crazy", "🌀", "放空狂人", "单日放空 12 次以上", any(c >= 12 for c in day_counts)),
+            ("hundred", "💯", "百次放空", "累计放空 100 次", total_cnt >= 100),
+        ]
+        return [dict(id=i, icon=ic, name=n, desc=d, got=bool(g)) for i, ic, n, d, g in items]
+
     # ---------------------------------------------------------------- 操作
-    def start(self):
+    def start(self, tag=""):
         with self._lock:
-            now = time.time()
-            self._ensure_day(now)
             if self._st.get("active"):
                 return
-            _, _, _, slots = self._context(now)
-            handled = self._st.setdefault("handled", {})
-            cand = self._candidate(now, slots)
-            if cand is not None:
-                handled[self._key(slots[cand]["ts"])] = "done"
-            for s in slots:
-                if s["ts"] > now:
-                    if s["ts"] - now <= EARLY_MERGE_SECONDS and self._key(s["ts"]) not in handled:
-                        handled[self._key(s["ts"])] = "done"
-                    break
-            self._st["active"] = now
+            self._st["active"] = dict(start=round(time.time(), 1), tag=tag if tag in TAG_IDS else "")
             self._st["over_notified"] = False
-            self._st["snooze_until"] = None
             self._save()
 
-    def _end_locked(self, now, cap=None):
+    def _finish(self, end_ts, auto=False):
         act = self._st.get("active")
         if not act:
             return 0.0
-        dur = max(0.0, now - act)
-        if cap:
-            dur = min(dur, cap)
-        if dur >= 30:
-            self._st.setdefault("log", []).append(dict(start=round(act), end=round(act + dur)))
+        dur = max(0.0, end_ts - act["start"])
+        if dur >= MIN_RECORD_SECONDS:
+            rec = dict(start=act["start"], end=round(end_ts, 1), tag=act.get("tag") or "")
+            if auto:
+                rec["auto"] = True
+            self._st["records"].append(rec)
         self._st["active"] = None
         self._st["over_notified"] = False
         self._save()
-        return dur / 60.0
+        return dur
 
     def end(self):
+        """结束放空并记录，返回本次时长（秒）。"""
         with self._lock:
-            return self._end_locked(time.time())
+            return self._finish(time.time())
 
-    def skip(self):
+    def cancel(self):
         with self._lock:
-            now = time.time()
-            self._ensure_day(now)
-            _, _, _, slots = self._context(now)
-            cand = self._candidate(now, slots)
-            if cand is not None:
-                self._st.setdefault("handled", {})[self._key(slots[cand]["ts"])] = "skipped"
-            self._st["snooze_until"] = None
+            self._st["active"] = None
+            self._st["over_notified"] = False
             self._save()
 
-    def snooze(self, minutes=5):
+    def delete(self, start):
         with self._lock:
-            self._st["snooze_until"] = time.time() + max(1, min(60, int(minutes))) * 60
+            start = float(start)
+            self._st["records"] = [r for r in self._st["records"] if abs(r["start"] - start) >= 1]
             self._save()
 
-    # ---------------------------------------------------------------- 后台定时
+    # ---------------------------------------------------------------- 后台：超时提醒
     def start_thread(self, on_event):
         self._on_event = on_event
         threading.Thread(target=self._loop, daemon=True).start()
@@ -290,48 +221,19 @@ class BreakTimer:
     def _tick(self):
         events = []
         with self._lock:
-            now = time.time()
-            self._ensure_day(now)
-            cfg, day, workday, slots = self._context(now)
-            notified = self._st.setdefault("notified", {})
             act = self._st.get("active")
             if act:
-                el = now - act
-                if el >= AUTO_END_MINUTES * 60:
-                    self._end_locked(now, cap=cfg["minutes"] * 60)
-                    events.append(("auto_end", "放空已超过 %d 分钟，已自动结束计时（按 %d 分钟记录）"
-                                   % (AUTO_END_MINUTES, cfg["minutes"])))
+                now = time.time()
+                cfg = _cfg()
+                el = now - act["start"]
+                if el >= AUTO_END_SECONDS:
+                    self._finish(act["start"] + cfg["minutes"] * 60, auto=True)
+                    events.append(("auto_end", "放空计时超过 3 小时，已自动结束（按 %d 分钟记录）。下次回来记得点「已回来」～"
+                                   % cfg["minutes"]))
                 elif not self._st.get("over_notified") and el >= cfg["minutes"] * 60:
                     self._st["over_notified"] = True
                     self._save()
-                    events.append(("over", "已经放空 %d 分钟啦，该回来继续干活了 💪" % int(el // 60)))
-            elif slots:
-                cand = self._candidate(now, slots)
-                sn = self._st.get("snooze_until")
-                if cand is not None and not (sn and now < sn):
-                    s = slots[cand]
-                    k = self._key(s["ts"])
-                    last = notified.get(k)
-                    if last is None or (sn and last < sn <= now):
-                        notified[k] = now
-                        self._st["snooze_until"] = None
-                        self._save()
-                        count, _ = self._log_stats()
-                        events.append(("due", "☕ %s 到点放空啦！起身走走、看看远处、喝口水，放空 %s 分钟（今日第 %d 次）"
-                                       % (s["hm"], _range_text(cfg["minutes"]), count + 1)))
-
-            if slots:
-                st, ls, le, en, lunch = _bounds(cfg)
-                count, mins = self._log_stats()
-                infos = [("end", _day_ts(day, en), "🎉 下班啦！今天共放空 %d 次、%d 分钟，辛苦了～" % (count, mins))]
-                if lunch:
-                    infos.insert(0, ("lunch", _day_ts(day, ls), "🍚 午休时间到啦！好好吃饭休息，%s 再回来～" % _fmt(le)))
-                for tag, ts, msg in infos:
-                    if ts <= now < ts + INFO_WINDOW and tag not in notified:
-                        notified[tag] = now
-                        self._save()
-                        events.append(("info", msg))
-
+                    events.append(("over", "已经放空 %d 分钟啦～ 回来后记得点「已回来」记录一下" % int(el // 60)))
         if self._on_event:
             for kind, msg in events:
                 try:

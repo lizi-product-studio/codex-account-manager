@@ -21,21 +21,14 @@ DEFAULTS = {
     "privacy_mode": False,                     # 隐私模式：对邮箱进行脱敏打码
     "theme": "auto",                           # 主题外观：auto | light | dark
     "tray_hint_shown": False,                  # 是否提示过“已缩到托盘”
-    # ---- 放空提醒 ----
-    "break_enabled": True,                     # 开启放空提醒
-    "break_workdays_only": True,               # 仅工作日（周一至周五）提醒
-    "break_bring_front": True,                 # 到点自动弹出主窗口
-    "break_work_start": "09:00",
-    "break_work_end": "18:00",
-    "break_lunch_start": "12:00",
-    "break_lunch_end": "13:00",
-    "break_am_interval": 60,                   # 上午每隔多少分钟提醒一次
-    "break_pm_interval": 30,                   # 下午每隔多少分钟提醒一次
-    "break_minutes": 10,                       # 每次放空建议上限（分钟）
+    # ---- 放空小站 ----
+    "break_enabled": True,                     # 顶栏显示「去放空」
+    "break_minutes": 10,                       # 单次建议时长（超过提醒回来）
+    "break_goal": 8,                           # 每日放空目标次数
 }
 
-INT_LIMITS = {"break_am_interval": (15, 240), "break_pm_interval": (15, 240), "break_minutes": (3, 30)}
-TIME_KEYS = ("break_work_start", "break_work_end", "break_lunch_start", "break_lunch_end")
+INT_LIMITS = {"break_minutes": (3, 60), "break_goal": (1, 30)}
+TIME_KEYS = ()
 
 
 def _norm_time(v):

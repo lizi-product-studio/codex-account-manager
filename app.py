@@ -131,21 +131,24 @@ class Api:
             return r
         return _safe(run)()
 
-    def break_action(self, action, minutes=5):
+    def break_action(self, action, arg=None):
         def run():
             b = self._svc.breaks
+            before = {x["id"] for x in b.status()["badges"] if x["got"]}
             if action == "start":
-                b.start()
+                b.start(arg or "")
             elif action == "end":
                 b.end()
-            elif action == "skip":
-                b.skip()
-            elif action == "snooze":
-                b.snooze(int(minutes or 5))
+            elif action == "cancel":
+                b.cancel()
+            elif action == "delete":
+                b.delete(float(arg))
             else:
                 raise StoreError("未知的放空操作")
+            st = b.status()
+            new = [x["icon"] + " " + x["name"] for x in st["badges"] if x["got"] and x["id"] not in before]
             threading.Thread(target=self._app.refresh_tray, daemon=True).start()
-            return {"ok": True, "breaks": b.status()}
+            return {"ok": True, "breaks": st, "new_badges": new}
         return _safe(run)()
 
     def quit_app(self):
@@ -242,10 +245,10 @@ class App:
             try:
                 if action == "start":
                     self.svc.breaks.start()
-                    self.tray.notify("开始放空 ☕ 回来后记得点“我回来了”", "放空提醒")
+                    self.tray.notify("出发放空 ☕ 回来后点「已回来」记录一下", "放空小站")
                 else:
-                    m = self.svc.breaks.end()
-                    self.tray.notify("欢迎回来！本次放空 %d 分钟" % max(1, round(m)), "放空提醒")
+                    sec = self.svc.breaks.end()
+                    self.tray.notify("欢迎回来！这次放空 %d 分钟" % max(1, round(sec / 60)), "放空小站")
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
             self.refresh_tray()
@@ -253,9 +256,7 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def on_break_event(self, kind, msg):
-        self.tray.notify(msg, "Codex 账号管家 · 放空提醒")
-        if kind == "due" and settings.load().get("break_bring_front", True):
-            self.show()
+        self.tray.notify(msg, "Codex 账号管家 · 放空小站")
         self.refresh_tray()
         self._push_ui()
 
