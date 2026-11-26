@@ -480,9 +480,18 @@ function renderCard(a, rawIdx, total) {
   const usage = a.usage;
   const st = a.status || {};
   const stale = st.freshness === 'stale';
-  const subWarn = a.sub_until && a.sub_until - nowSec() < 3 * 86400;
+  const subLeft = a.sub_until ? a.sub_until - nowSec() : null;
+  let subHtml = '';
+  if (a.sub_until) {
+    if (subLeft > 0) {
+      const subWarn = subLeft <= 3 * 86400;
+      subHtml = `<span class="${subWarn ? 'warn' : ''}">订阅至 ${fmtDate(a.sub_until, false)}${subWarn ? '（快到期）' : ''}</span>`;
+    } else if (a.sub_state === 'stale') {
+      subHtml = `<span title="该日期来自上次刷新凭证时的本地记录；若已续费，切换后会自动刷新">上次记录订阅至 ${fmtDate(a.sub_until, false)}（待刷新）</span>`;
+    }
+  }
   const meta = [
-    a.sub_until ? `<span class="${subWarn ? 'warn' : ''}">订阅至 ${fmtDate(a.sub_until, false)}${subWarn ? '（快到期）' : ''}</span>` : '',
+    subHtml,
     a.last_refresh ? `<span title="${fmtDate(a.last_refresh)}">凭证刷新于 <span data-ago="${a.last_refresh}">${fmtAgo(a.last_refresh)}</span></span>` : '',
   ].filter(Boolean).join('');
   let src = '本地日志';
@@ -602,7 +611,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.6.0';
+  const ver = state.version || u.app_version || '1.6.1';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -757,7 +766,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.6.0';
+  const ver = (state && state.version) || u.app_version || '1.6.1';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');

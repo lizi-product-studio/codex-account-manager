@@ -176,6 +176,37 @@ class Service:
         cur, _, _ = self._current()
         return cur["valid"] and not self.store.find_by_key(cur["key"])
 
+    @staticmethod
+    def _resolve_plan_and_sub(info, usage, status, now):
+        """合并本地 JWT 与实时额度里的订阅套餐和到期日，避免过期的 JWT 到期日误报。"""
+        u_plan = (usage or {}).get("plan") or ""
+        u_updated = (usage or {}).get("updated") or 0
+        last_refresh = info.get("last_refresh") or 0
+        # 实时接口或比凭证更新的额度快照，其 planType 更权威
+        if u_plan and ((status or {}).get("freshness") == "live" or u_updated >= last_refresh):
+            plan = u_plan
+        else:
+            plan = info.get("plan") or u_plan
+
+        paid = bool(plan) and plan.lower() not in ("free", "api-key")
+        sub_until = info.get("sub_until")
+        if not sub_until:
+            return plan, None, ""
+        if not paid:
+            # 账号已降为 Free 或非订阅模式，不再展示旧周期的过期时间
+            return plan, (sub_until if sub_until > now else None), ("active" if sub_until > now else "")
+        if sub_until > now:
+            return plan, sub_until, ("soon" if sub_until - now <= 3 * 86400 else "active")
+        # sub_until 已过：若在 sub_until 之后仍有实时/较新证据表明账号仍是付费套餐（如自动续费后 JWT 未更新到期日），隐藏滞后日期
+        proved_active = (
+            (u_updated > sub_until and bool(u_plan) and u_plan.lower() not in ("free", "api-key"))
+            or (u_updated > sub_until and (status or {}).get("freshness") == "live" and paid)
+            or (last_refresh > sub_until and bool(info.get("plan")) and info["plan"].lower() not in ("free", "api-key"))
+        )
+        if proved_active:
+            return plan, None, "renewed"
+        return plan, sub_until, "stale"
+
     # ---------------------------------------------------------------- 查询
     def get_state(self, scan=True):
         with self.lock:
@@ -196,16 +227,19 @@ class Service:
             for a in stored:
                 info = a["info"]
                 u = usage.get(info["key"]) if info["valid"] else None
+                st = account_status(u, now)
+                plan, sub_until, sub_state = self._resolve_plan_and_sub(info, u, st, now)
                 accounts.append(dict(
                     id=a["id"], name=a["name"], note=a.get("note", ""),
-                    valid=info["valid"], email=info["email"], plan=info["plan"],
-                    sub_until=info["sub_until"], last_refresh=info["last_refresh"],
+                    valid=info["valid"], email=info["email"], plan=plan,
+                    sub_until=sub_until, sub_state=sub_state, last_refresh=info["last_refresh"],
                     access_exp=info["access_exp"],
                     is_current=bool(cur["valid"] and info["valid"] and info["key"] == cur["key"]),
-                    usage=u, status=account_status(u, now),
+                    usage=u, status=st,
                 ))
             cu = usage.get(cur["key"]) if cur["valid"] else None
             cur_status = account_status(cu, now)
+            cur_plan, cur_sub_until, cur_sub_state = self._resolve_plan_and_sub(cur, cu, cur_status, now)
             # 若当前登录账号还没有实时数据（例如刚重置完显示“预计 100%”或还是旧数据），自动在后台触发一次实时同步
             if cur["valid"] and cur["mode"] == "chatgpt" and cur_status["freshness"] in ("reset", "stale", "none"):
                 self.refresh_live_async(force=False)
@@ -218,8 +252,8 @@ class Service:
                 update=self.updater.get_status(),
                 breaks=self.breaks.status(),
                 current=dict(
-                    valid=cur["valid"], email=cur["email"], plan=cur["plan"],
-                    sub_until=cur["sub_until"], last_refresh=cur["last_refresh"],
+                    valid=cur["valid"], email=cur["email"], plan=cur_plan,
+                    sub_until=cur_sub_until, sub_state=cur_sub_state, last_refresh=cur["last_refresh"],
                     saved_id=saved["id"] if saved else None,
                     saved_name=saved["name"] if saved else None,
                     usage=cu, status=cur_status,
