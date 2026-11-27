@@ -550,6 +550,8 @@ function render(force = false) {
   const st = $('codexStatus');
   if (state.codex_running === null) { st.textContent = 'Codex 状态检测中'; st.className = 'pill'; }
   else { st.textContent = state.codex_running ? 'Codex 运行中' : 'Codex 未运行'; st.className = 'pill' + (state.codex_running ? ' on' : ''); }
+  const btnRestart = $('btnRestartCodex');
+  if (btnRestart) btnRestart.textContent = state.codex_running === false ? '▶ 启动 Codex' : '↻ 重启 Codex';
 
   const banner = $('banner');
   if (state.current.valid && !state.current.saved_id) {
@@ -611,7 +613,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.7.2';
+  const ver = state.version || u.app_version || '1.7.3';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -710,6 +712,41 @@ window.switchById = async (id) => {
   if (a) switchTo(a);
 };
 
+async function restartCodex() {
+  if (busy) return;
+  const running = !!(state && state.codex_running);
+  if (running && settings.confirm_before_switch !== false) {
+    const ans = await dialog({
+      title: '重启 Codex',
+      body: '将关闭当前所有 Codex 进程并重新启动，正在进行的任务会被中断。',
+      buttons: [
+        { id: 'cancel', text: '取消' },
+        { id: 'never', text: '重启（不再提示）' },
+        { id: 'ok', text: '立即重启', kind: 'primary' },
+      ],
+    });
+    if (ans.id === 'cancel') return;
+    if (ans.id === 'never') setSetting('confirm_before_switch', false);
+  }
+  const steps = running ? ['关闭全部 Codex 进程', '重新启动 Codex'] : ['启动 Codex'];
+  setBusy(true, running ? '正在重启 Codex…' : '正在启动 Codex…', steps);
+  try {
+    const r = await call('restart_codex');
+    setSteps(steps, steps.length);
+    if (r.state) {
+      state = r.state;
+      render(true);
+    }
+    setBusy(false);
+    toast(r.message || (running ? 'Codex 正在重新启动' : 'Codex 正在启动'));
+    [2200, 4500, 7500].forEach((ms) => setTimeout(() => refresh(true, true), ms));
+  } catch (e) {
+    setBusy(false);
+    toast(e.message, true);
+    await refresh(true, true);
+  }
+}
+
 async function addNew() {
   await refresh();
   const g = await ensureSaved();
@@ -766,7 +803,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.7.2';
+  const ver = (state && state.version) || u.app_version || '1.7.3';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');
@@ -1232,6 +1269,7 @@ async function init() {
   });
   $('btnSave').onclick = saveCurrent;
   $('btnAdd').onclick = addNew;
+  $('btnRestartCodex').onclick = restartCodex;
   $('chkLaunch').onchange = (e) => setSetting('launch_after_switch', e.target.checked);
 
   // 总览：排序切换 / 行内按钮 / 点击行定位卡片

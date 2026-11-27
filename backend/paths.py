@@ -1,7 +1,7 @@
 """所有路径集中在这里。"""
 import os
 
-APP_VERSION = "1.7.2"
+APP_VERSION = "1.7.3"
 
 HOME = os.path.expanduser("~")
 CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")

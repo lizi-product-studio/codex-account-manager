@@ -56,6 +56,7 @@ if IS_WIN:
             self._on_switch = on_switch
             self._on_quit = on_quit
             self.on_break = None
+            self.on_restart_codex = None
             self._state = None
             self._last_sig = None
             self.icon = pystray.Icon(
@@ -80,13 +81,17 @@ if IS_WIN:
                     enabled=a["valid"],
                 )
             yield pystray.Menu.SEPARATOR
+            if self.on_restart_codex:
+                running = bool((self._state or {}).get("codex_running"))
+                yield pystray.MenuItem("↻ 重启 Codex" if running else "▶ 启动 Codex",
+                                       lambda icon, item: self.on_restart_codex())
             br = (self._state or {}).get("breaks") or {}
             if br.get("enabled") and self.on_break:
                 if br.get("active"):
                     yield pystray.MenuItem("☕ 已回来", lambda icon, item: self.on_break("end"))
                 else:
                     yield pystray.MenuItem("☕ 去放空", lambda icon, item: self.on_break("start"))
-                yield pystray.Menu.SEPARATOR
+            yield pystray.Menu.SEPARATOR
             yield pystray.MenuItem("退出", lambda icon, item: self._on_quit())
 
         def _make_switch(self, acc_id, is_current):
@@ -109,7 +114,7 @@ if IS_WIN:
             name = cur["name"] if cur else (state.get("current", {}).get("email") or "未登录")
             title = "Codex 账号管家\n当前：%s · %s" % (name, status_text(st))
             br = state.get("breaks") or {}
-            sig = (remaining, level, title, bool(br.get("enabled")), bool(br.get("active")), tuple((a["id"], a["name"], a["is_current"], status_text(a.get("status")))
+            sig = (remaining, level, title, bool(state.get("codex_running")), bool(br.get("enabled")), bool(br.get("active")), tuple((a["id"], a["name"], a["is_current"], status_text(a.get("status")))
                                                  for a in state.get("accounts", [])))
             if sig == self._last_sig:
                 return
@@ -144,6 +149,7 @@ else:
             self._on_switch = on_switch
             self._on_quit = on_quit
             self.on_break = None
+            self.on_restart_codex = None
 
         def update(self, state):
             pass

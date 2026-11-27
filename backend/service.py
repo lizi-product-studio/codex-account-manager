@@ -331,6 +331,24 @@ class Service:
             return dict(ok=True)
         return dict(ok=False, error="没找到 Codex 桌面版，请手动打开")
 
+    def restart_codex(self):
+        """一键重启 Codex（彻底清理全部 Codex 进程后再按标准方式重新启动）。"""
+        with self.lock:
+            was_running = bool(codex.list_processes())
+            if was_running:
+                ok, rem = codex.stop()
+                if not ok:
+                    extra = "（残留进程：%s）" % rem if rem else ""
+                    raise StoreError("Codex 没能完全关闭%s，请手动退出（包括%s）后再试" % (extra, self._stop_hint()))
+            self.codex_running = False
+            self._sync_current()
+            if not codex.start():
+                raise StoreError("没找到 Codex 桌面版，请手动打开")
+            self.codex_running = True
+            self.refresh_live_async(force=True, delay=2.5, retries=2)
+            msg = "已关闭并正在重新启动 Codex" if was_running else "Codex 正在启动"
+            return dict(ok=True, message=msg, state=self.get_state(scan=False))
+
     def switch(self, acc_id, launch=True, force=False):
         with self.lock:
             target = self.store.get(acc_id)

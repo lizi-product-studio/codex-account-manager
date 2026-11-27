@@ -93,6 +93,9 @@ class Api:
     def start_codex(self):
         return _safe(self._svc.start_codex)()
 
+    def restart_codex(self):
+        return _safe(self._svc.restart_codex)()
+
     def add_new(self, launch=True, force=False):
         return _safe(self._svc.add_new)(bool(launch), bool(force))
 
@@ -171,6 +174,7 @@ class App:
         self.notifier = Notifier()
         self.tray = Tray(self.show, self.switch_from_tray, self.quit)
         self.tray.on_break = self.break_from_tray
+        self.tray.on_restart_codex = self.restart_codex_from_tray
 
     # ---------------------------------------------------------------- 窗口
     def show(self):
@@ -259,6 +263,17 @@ class App:
         self.tray.notify(msg, "Codex 账号管家 · 放空小站")
         self.refresh_tray()
         self._push_ui()
+
+    def restart_codex_from_tray(self):
+        def run():
+            try:
+                r = self.svc.restart_codex()
+                self.tray.notify(r.get("message") or "Codex 正在重新启动")
+            except Exception as e:  # noqa: BLE001
+                self.tray.notify("重启 Codex 失败：%s" % e)
+            self.refresh_tray()
+            self._push_ui()
+        threading.Thread(target=run, daemon=True).start()
 
     def switch_from_tray(self, acc_id):
         def run():
