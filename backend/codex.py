@@ -285,7 +285,6 @@ def stop():
 
 
 _pfn_cache = None
-_alias_cache = None
 
 
 def package_family():
@@ -304,41 +303,10 @@ def package_family():
     return _pfn_cache
 
 
-def _win_app_alias():
-    """查找 MSIX 原生 AppExecutionAlias（chatgpt-desktop.exe），比 shell:AppsFolder 唤起快得多。"""
-    global _alias_cache
-    if _alias_cache is not None:
-        return _alias_cache
-    winapps = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps")
-    pfn = package_family()
-    cands = []
-    if pfn:
-        cands.append(os.path.join(winapps, pfn, "chatgpt-desktop.exe"))
-    cands.append(os.path.join(winapps, "chatgpt-desktop.exe"))
-    for c in cands:
-        if c and os.path.exists(c):
-            _alias_cache = c
-            return c
-    _alias_cache = ""
-    return ""
-
-
 def start():
     if IS_WIN:
-        # 1. 优先直接非阻塞启动 MSIX 原生别名 chatgpt-desktop.exe（<5ms 返回，绕开 Explorer/ShellExecute 排队）
-        alias = _win_app_alias()
-        if alias:
-            try:
-                flags = CREATE_NO_WINDOW | getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
-                subprocess.Popen(
-                    [alias],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                    close_fds=True, creationflags=flags,
-                )
-                return True
-            except OSError:
-                pass
-        # 2. 回退：异步通过 shell:AppsFolder 唤起，避免同步阻塞切号返回
+        # 必须走官方标准 MSIX shell:AppsFolder 唤起（保证单实例且正常显示主窗口，切勿用 CREATE_NO_WINDOW 直启别名）
+        # 放在后台线程中异步触发，避免 ShellExecuteW 同步阻塞切换界面返回
         pfn = package_family()
         if not pfn:
             return False

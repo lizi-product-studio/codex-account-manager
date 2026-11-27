@@ -611,7 +611,7 @@ function render(force = false) {
     ? accs.map((a) => renderCard(a, rawIdxById.get(a.id), accs.length)).join('')
     : `<div class="empty"><b>还没有保存任何账号</b><br><br>
        先保存正在用的账号，再用“登录新账号”添加其他账号。<br>每个账号只需要登录一次，之后都能一键切换。</div>`;
-  const ver = state.version || u.app_version || '1.7.1';
+  const ver = state.version || u.app_version || '1.7.2';
   $('footInfo').textContent = `v${ver} · ${accs.length} 个账号 · ${state.snapshots} 条额度记录 · 自动刷新`;
 }
 
@@ -766,7 +766,7 @@ function scrollToCard(id) {
 // ------------------------------------------------------------------ 更新
 function renderUpdateBox() {
   const u = (state && state.update) || {};
-  const ver = (state && state.version) || u.app_version || '1.7.1';
+  const ver = (state && state.version) || u.app_version || '1.7.2';
   $('updateVer').textContent = u.local_short ? `v${ver} (${u.local_short})` : `v${ver}`;
   const btnCheck = $('btnCheckUpdate');
   const btnApply = $('btnApplyUpdate');
