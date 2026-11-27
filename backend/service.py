@@ -348,8 +348,9 @@ class Service:
                 extra = "（残留进程：%s）" % rem if rem else ""
                 raise StoreError("Codex 没能完全关闭%s，请手动退出（包括%s）后再试" % (extra, self._stop_hint()))
             self.codex_running = False
-            self._sync_current()            # 关闭后再同步一次，拿到 Codex 最后刷新的 token
-            self._backup_auth()
+            # 先拿到当前 auth.json 字节（仅一次读盘），立刻写入目标凭证并第一时间拉起 Codex，
+            # 把旧凭证存档回写与备份放到新 Codex 已经开始启动之后并行执行，零前置耗时
+            prev_cur, prev_data, _ = self._current()
             atomic_write_bytes(paths.AUTH_FILE, target["data"])
             self.timeline.append(time.time(), tinfo["key"], "switch")
             msg = "已切换到“%s”" % target["name"]
@@ -359,7 +360,29 @@ class Service:
                     msg += "，Codex 正在启动"
                 else:
                     msg += "，但没找到 Codex 桌面版，请手动打开"
-            self.refresh_live_async(force=True, delay=1.2 if launch else 0.2, retries=2)
+
+            def _post_housekeeping(p_cur=prev_cur, p_data=prev_data):
+                try:
+                    with self.lock:
+                        if p_cur["valid"] and p_data:
+                            acc = self.store.find_by_key(p_cur["key"])
+                            if acc and acc["data"] != p_data:
+                                if (p_cur.get("last_refresh") or 0) >= (acc["info"].get("last_refresh") or 0):
+                                    self.store.update_auth(acc["id"], p_data)
+                            dst = os.path.join(paths.BACKUP_DIR, "auth-%s.json" % time.strftime("%Y%m%d-%H%M%S"))
+                            atomic_write_bytes(dst, p_data)
+                            olds = sorted((f for f in os.listdir(paths.BACKUP_DIR) if f.startswith("auth-")), reverse=True)
+                            for f in olds[20:]:
+                                try:
+                                    os.remove(os.path.join(paths.BACKUP_DIR, f))
+                                except OSError:
+                                    pass
+                except Exception:  # noqa: BLE001
+                    pass
+
+            threading.Thread(target=_post_housekeeping, daemon=True).start()
+            # 启动新 Codex 时前 2.5s 让给 Codex 独占 CPU / 磁盘 I/O，不与之抢资源
+            self.refresh_live_async(force=True, delay=2.5 if launch else 0.15, retries=2)
             return dict(ok=True, message=msg, state=self.get_state(scan=False))
 
     def add_new(self, launch=True, force=False):

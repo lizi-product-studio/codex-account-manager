@@ -172,10 +172,16 @@ def is_running():
         return False
 
 
-def _win_terminate_and_wait(pids, timeout_ms=280):
+def _win_terminate_and_wait(wait_pids, bg_pids=(), timeout_ms=280):
+    """终止全部相关进程，但只阻塞等待关键进程（ChatGPT / codex）句柄退出，辅助进程异步收尾。"""
     handles = []
     try:
-        for pid in pids:
+        for pid in bg_pids:
+            h = _k32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+            if h:
+                _k32.TerminateProcess(h, 0)
+                _k32.CloseHandle(h)
+        for pid in wait_pids:
             h = _k32.OpenProcess(_PROCESS_TERMINATE | _SYNCHRONIZE, False, pid)
             if h:
                 _k32.TerminateProcess(h, 0)
@@ -186,7 +192,7 @@ def _win_terminate_and_wait(pids, timeout_ms=280):
                     _k32.TerminateProcess(h2, 0)
                     _k32.CloseHandle(h2)
         if handles:
-            # WaitForMultipleObjects 单次最多等待 64 个内核句柄，进程全部退出那 1ms 立即唤醒返回
+            # WaitForMultipleObjects 单次最多等待 64 个内核句柄，关键进程退出的那 1ms 立即唤醒返回
             batch = handles[:64]
             arr = (wintypes.HANDLE * len(batch))(*batch)
             _k32.WaitForMultipleObjects(len(batch), arr, True, timeout_ms)
@@ -201,18 +207,28 @@ def stop():
         rem = list_processes()
         if not rem:
             return True, ""
-        # 直接通过 Win32 TerminateProcess + WaitForMultipleObjects 零轮询空等终止
+        # 终止全部相关进程，但只等待核心进程（ChatGPT / codex）退出即立刻放行，不卡在 node_repl 等辅助进程回收
         start_t = time.monotonic()
-        deadline = start_t + 5.0
+        deadline = start_t + 4.0
         taskkill_tried = False
         while True:
-            parents = [p["Id"] for p in rem if p.get("Name") == "ChatGPT"]
-            others = [p["Id"] for p in rem if p.get("Name") != "ChatGPT"]
-            _win_terminate_and_wait(parents + others, timeout_ms=260)
+            core = [p["Id"] for p in rem if p.get("Name") in ("ChatGPT", "codex")]
+            helpers = [p["Id"] for p in rem if p.get("Name") not in ("ChatGPT", "codex")]
+            if not core:
+                # 关键进程已全部退出，给残余辅助进程发一次异步终止即可返回
+                if helpers:
+                    _win_terminate_and_wait([], bg_pids=helpers, timeout_ms=0)
+                return True, ""
+            _win_terminate_and_wait(core, bg_pids=helpers, timeout_ms=260)
             rem = list_processes()
-            if not rem or time.monotonic() >= deadline:
+            core_rem = [p for p in rem if p.get("Name") in ("ChatGPT", "codex")]
+            if not core_rem:
+                if rem:
+                    _win_terminate_and_wait([], bg_pids=[p["Id"] for p in rem], timeout_ms=0)
+                return True, ""
+            if time.monotonic() >= deadline:
                 break
-            if not taskkill_tried and parents and (time.monotonic() - start_t) >= 0.8:
+            if not taskkill_tried and any(p.get("Name") == "ChatGPT" for p in core_rem) and (time.monotonic() - start_t) >= 0.6:
                 taskkill_tried = True
                 try:
                     subprocess.run(
@@ -223,13 +239,14 @@ def stop():
                 except Exception:
                     pass
                 rem = list_processes()
-                if not rem:
-                    break
-            time.sleep(0.015)
+                if not any(p.get("Name") in ("ChatGPT", "codex") for p in rem):
+                    return True, ""
+            time.sleep(0.01)
 
-        if not rem:
+        core_rem = [p for p in rem if p.get("Name") in ("ChatGPT", "codex")]
+        if not core_rem:
             return True, ""
-        return False, ",".join(sorted({p.get("Name") or "Codex" for p in rem}))
+        return False, ",".join(sorted({p.get("Name") or "Codex" for p in core_rem}))
     elif IS_MAC:
         rem = list_processes()
         if not rem:
@@ -268,6 +285,7 @@ def stop():
 
 
 _pfn_cache = None
+_alias_cache = None
 
 
 def package_family():
@@ -286,18 +304,57 @@ def package_family():
     return _pfn_cache
 
 
+def _win_app_alias():
+    """查找 MSIX 原生 AppExecutionAlias（chatgpt-desktop.exe），比 shell:AppsFolder 唤起快得多。"""
+    global _alias_cache
+    if _alias_cache is not None:
+        return _alias_cache
+    winapps = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps")
+    pfn = package_family()
+    cands = []
+    if pfn:
+        cands.append(os.path.join(winapps, pfn, "chatgpt-desktop.exe"))
+    cands.append(os.path.join(winapps, "chatgpt-desktop.exe"))
+    for c in cands:
+        if c and os.path.exists(c):
+            _alias_cache = c
+            return c
+    _alias_cache = ""
+    return ""
+
+
 def start():
     if IS_WIN:
+        # 1. 优先直接非阻塞启动 MSIX 原生别名 chatgpt-desktop.exe（<5ms 返回，绕开 Explorer/ShellExecute 排队）
+        alias = _win_app_alias()
+        if alias:
+            try:
+                flags = CREATE_NO_WINDOW | getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                subprocess.Popen(
+                    [alias],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                    close_fds=True, creationflags=flags,
+                )
+                return True
+            except OSError:
+                pass
+        # 2. 回退：异步通过 shell:AppsFolder 唤起，避免同步阻塞切号返回
         pfn = package_family()
         if not pfn:
             return False
         target = "shell:AppsFolder\\%s!App" % pfn
-        try:
-            os.startfile(target)
-            return True
-        except OSError:
-            subprocess.Popen(["explorer.exe", target], creationflags=CREATE_NO_WINDOW)
-            return True
+
+        def _bg_launch():
+            try:
+                os.startfile(target)
+            except OSError:
+                try:
+                    subprocess.Popen(["explorer.exe", target], creationflags=CREATE_NO_WINDOW)
+                except OSError:
+                    pass
+
+        threading.Thread(target=_bg_launch, daemon=True).start()
+        return True
     elif IS_MAC:
         for app_path in ("/Applications/Codex.app", os.path.expanduser("~/Applications/Codex.app")):
             if os.path.isdir(app_path):
